@@ -3,7 +3,7 @@ Tesla Model X 2017 Frunk Modular Divider System
 Autodesk Fusion 360 - Standalone All-In-One CAD Generator Script
 
 INSTRUCTIONS:
-1. In Fusion 360, open a design tab (File -> New Design).
+1. In Fusion 360, open a clean workspace (File -> New Design).
 2. Press Shift + S (Scripts and Add-Ins).
 3. Select 'ModelX_Frunk_Dividers' and click 'Run'.
 """
@@ -141,54 +141,34 @@ def calculate_truss_web_triangles(
     return triangles
 
 
-def calculate_diamond_lattice_segments(
-    width: float,
-    height: float,
-    pitch: float,
-    strut_w: float
-) -> List[Tuple[Tuple[float, float], Tuple[float, float]]]:
-    segments = []
-    step = pitch * math.sqrt(2)
+def calculate_diamond_apertures(
+    inner_w: float = 278.0,
+    inner_h: float = 255.0,
+    pitch: float = 18.0,
+    strut_w: float = 3.5,
+    margin: float = 2.0
+) -> List[List[Tuple[float, float]]]:
+    """Generates closed 4-point diamond polygons for through-all cutouts."""
+    apertures = []
+    radius = (pitch - strut_w) / math.sqrt(2.0)
+    step_x = pitch
+    step_y = pitch
+    nx = int(math.ceil(inner_w / step_x)) + 1
+    ny = int(math.ceil(inner_h / step_y)) + 1
 
-    # +45 degree lines: y = x + c
-    c = -width
-    while c <= height:
-        pts = []
-        if 0.0 <= c <= height:
-            pts.append((0.0, c))
-        if 0.0 <= width + c <= height:
-            pts.append((width, width + c))
-        if 0.0 <= -c <= width and (-c != 0.0 or c != 0.0):
-            pts.append((-c, 0.0))
-        if 0.0 <= height - c <= width and (height - c != width or width + c != height):
-            pts.append((height - c, height))
-
-        unique_pts = list(set([(round(p[0], 4), round(p[1], 4)) for p in pts]))
-        if len(unique_pts) == 2:
-            unique_pts.sort()
-            segments.append((unique_pts[0], unique_pts[1]))
-        c += step
-
-    # -45 degree lines: y = -x + d
-    d = 0.0
-    while d <= width + height:
-        pts = []
-        if 0.0 <= d <= height:
-            pts.append((0.0, d))
-        if 0.0 <= d - width <= height:
-            pts.append((width, d - width))
-        if 0.0 <= d <= width:
-            pts.append((d, 0.0))
-        if 0.0 <= d - height <= width:
-            pts.append((d - height, height))
-
-        unique_pts = list(set([(round(p[0], 4), round(p[1], 4)) for p in pts]))
-        if len(unique_pts) == 2:
-            unique_pts.sort()
-            segments.append((unique_pts[0], unique_pts[1]))
-        d += step
-
-    return segments
+    for iy in range(ny):
+        for ix in range(nx):
+            cx = ix * step_x + ((iy % 2) * (step_x / 2.0))
+            cy = iy * step_y
+            if (cx - radius >= margin and cx + radius <= inner_w - margin and
+                cy - radius >= margin and cy + radius <= inner_h - margin):
+                apertures.append([
+                    (cx, cy + radius),
+                    (cx + radius, cy),
+                    (cx, cy - radius),
+                    (cx - radius, cy)
+                ])
+    return apertures
 
 
 # ==============================================================================
@@ -294,13 +274,13 @@ def create_user_parameters(design: Any, params: FrunkParameters):
 
 
 # ==============================================================================
-# Separated 3D Component Model Builders
+# Separated 3D Component Model Builders with Full Boolean Solid Features
 # ==============================================================================
 
 def build_floor_truss_component(comp: Any, params: FrunkParameters, offset_x: float = 0.0, offset_y: float = 0.0):
     """
-    Builds the 12-inch Floor Truss (`FT_Segment_12in`) with triangular web cutouts,
-    sliding dovetails, socket pocket, and pin hole.
+    Builds the 12-inch Floor Truss (`FT_Segment_12in`) with through-all triangular web cutouts,
+    sliding male/female dovetails, rib socket pocket, and pin hole.
     """
     sketches = comp.sketches
     plane_xy = comp.xYConstructionPlane if hasattr(comp, "xYConstructionPlane") else None
@@ -327,15 +307,7 @@ def build_floor_truss_component(comp: Any, params: FrunkParameters, offset_x: fl
         _extrude_simple(comp, profs[0], _create_value_real(h_cm), op_new)
         _name_last_body(comp, "FT_Segment_12in")
 
-    # 2. Triangular web cutouts (Cut through Y)
-    sketch_webs = sketches.add(plane_xz)
-    triangles = calculate_truss_web_triangles(span_length=params.bay_spacing_mm, height=params.truss_height_mm, web_thickness=4.0, num_bays=6)
-    for tri in triangles:
-        pts = [_create_point(ox + p[0] / 10.0, 0.0, p[1] / 10.0) for p in tri]
-        for i in range(3):
-            sketch_webs.sketchCurves.sketchLines.addByTwoPoints(pts[i], pts[(i + 1) % 3])
-
-    # 3. Male dovetail tab at +X end
+    # 2. Male dovetail tab at +X end (Join extrusion)
     sketch_male = sketches.add(plane_xy)
     male_pts = calculate_dovetail_profile(male=True, tol=params.tol_dovetail_mm, base_w=params.dovetail_base_width_mm, depth=params.dovetail_depth_mm, angle_deg=params.dovetail_angle_deg)
     dt_pts = [_create_point(ox + l_cm + p[1] / 10.0, oy + p[0] / 10.0, 0.0) for p in male_pts]
@@ -346,12 +318,29 @@ def build_floor_truss_component(comp: Any, params: FrunkParameters, offset_x: fl
     if male_profs:
         _extrude_simple(comp, male_profs[0], _create_value_real(h_cm), op_join)
 
-    # 4. Female dovetail pocket sketch at X=0
+    # 3. Female dovetail pocket at X=ox (Cut extrusion)
     sketch_female = sketches.add(plane_xy)
     female_pts = calculate_dovetail_profile(male=False, tol=params.tol_dovetail_mm, base_w=params.dovetail_base_width_mm, depth=params.dovetail_depth_mm, angle_deg=params.dovetail_angle_deg)
     f_dt_pts = [_create_point(ox + p[1] / 10.0, oy + p[0] / 10.0, 0.0) for p in female_pts]
     for i in range(len(f_dt_pts)):
         sketch_female.sketchCurves.sketchLines.addByTwoPoints(f_dt_pts[i], f_dt_pts[(i + 1) % len(f_dt_pts)])
+
+    female_profs = _get_all_profiles(sketch_female)
+    if female_profs:
+        _extrude_simple(comp, female_profs[0], _create_value_real(h_cm), op_cut)
+
+    # 4. Triangular web cutouts (Cut through full width Y)
+    sketch_webs = sketches.add(plane_xz)
+    triangles = calculate_truss_web_triangles(span_length=params.bay_spacing_mm, height=params.truss_height_mm, web_thickness=4.0, num_bays=6)
+    for tri in triangles:
+        pts = [_create_point(ox + p[0] / 10.0, 0.0, p[1] / 10.0) for p in tri]
+        for i in range(3):
+            sketch_webs.sketchCurves.sketchLines.addByTwoPoints(pts[i], pts[(i + 1) % 3])
+
+    web_profs = _get_all_profiles(sketch_webs)
+    for wp in web_profs:
+        # Symmetrical cut through the beam
+        _extrude_simple(comp, wp, _create_value_real(w_cm * 2.0), op_cut)
 
     # 5. Socket pocket (20x20mm) and pin hole
     sketch_socket = sketches.add(plane_xy)
@@ -361,11 +350,15 @@ def build_floor_truss_component(comp: Any, params: FrunkParameters, offset_x: fl
     sp2 = _create_point(soc_x_mid + soc_w_cm / 2.0, oy + soc_w_cm / 2.0, 0.0)
     sketch_socket.sketchCurves.sketchLines.addTwoPointRectangle(sp1, sp2)
 
+    soc_profs = _get_all_profiles(sketch_socket)
+    if soc_profs:
+        _extrude_simple(comp, soc_profs[0], _create_value_real(-2.5), op_cut)
+
 
 def build_vertical_rib_component(comp: Any, params: FrunkParameters, offset_x: float = 0.0, offset_y: float = 60.0):
     """
     Builds the 11-inch Vertical Rib Post (`VR_Post_Deep`) laid horizontally for easy viewing.
-    Features: 280mm long post, 6.4mm slots along sides, bottom tenon, and pin hole.
+    Features: 280mm column, longitudinal 6.4mm slots, bottom tenon, and transverse pin hole.
     """
     sketches = comp.sketches
     plane_xy = comp.xYConstructionPlane if hasattr(comp, "xYConstructionPlane") else None
@@ -379,6 +372,7 @@ def build_vertical_rib_component(comp: Any, params: FrunkParameters, offset_x: f
 
     op_new = adsk.fusion.FeatureOperations.NewBodyFeatureOperation if FUSION_AVAILABLE else 0
     op_join = adsk.fusion.FeatureOperations.JoinFeatureOperation if FUSION_AVAILABLE else 1
+    op_cut = adsk.fusion.FeatureOperations.CutFeatureOperation if FUSION_AVAILABLE else 2
 
     # 1. Main post body (laid flat along X from ox to ox + h_cm)
     sketch_post = sketches.add(plane_xy)
@@ -391,13 +385,17 @@ def build_vertical_rib_component(comp: Any, params: FrunkParameters, offset_x: f
         _extrude_simple(comp, profs[0], _create_value_real(w_cm), op_new)
         _name_last_body(comp, "VR_Post_Deep")
 
-    # 2. Guide slot sketches along post length
+    # 2. Guide slot cuts along post length
     sketch_slot = sketches.add(plane_xy)
     s1 = _create_point(ox, oy - slot_w_cm / 2.0, 0.0)
     s2 = _create_point(ox + h_cm, oy + slot_w_cm / 2.0, 0.0)
     sketch_slot.sketchCurves.sketchLines.addTwoPointRectangle(s1, s2)
 
-    # 3. Bottom Tenon extending out at X = ox - 20mm
+    slot_profs = _get_all_profiles(sketch_slot)
+    if slot_profs:
+        _extrude_simple(comp, slot_profs[0], _create_value_real(-slot_d_cm), op_cut)
+
+    # 3. Bottom Tenon extending at X = ox - 20mm
     sketch_tenon = sketches.add(plane_xy)
     tenon_w_cm = (20.0 - 2.0 * params.tol_tenon_mm) / 10.0
     t1 = _create_point(ox - 2.0, oy - tenon_w_cm / 2.0, 0.0)
@@ -411,7 +409,7 @@ def build_vertical_rib_component(comp: Any, params: FrunkParameters, offset_x: f
 
 def build_horizontal_rail_component(comp: Any, params: FrunkParameters, offset_x: float = 0.0, offset_y: float = 120.0):
     """
-    Builds the 12-inch Horizontal Top Rail (`HR_Rail_12in`).
+    Builds the 12-inch Horizontal Top Rail (`HR_Rail_12in`) with bottom panel slot & dovetail.
     """
     sketches = comp.sketches
     plane_xy = comp.xYConstructionPlane if hasattr(comp, "xYConstructionPlane") else None
@@ -419,11 +417,13 @@ def build_horizontal_rail_component(comp: Any, params: FrunkParameters, offset_x
     w_cm = params.truss_width_cm
     l_cm = params.bay_spacing_cm
     slot_w_cm = params.slot_width_cm
+    slot_d_cm = params.slot_depth_cm
     ox = offset_x / 10.0
     oy = offset_y / 10.0
 
     op_new = adsk.fusion.FeatureOperations.NewBodyFeatureOperation if FUSION_AVAILABLE else 0
     op_join = adsk.fusion.FeatureOperations.JoinFeatureOperation if FUSION_AVAILABLE else 1
+    op_cut = adsk.fusion.FeatureOperations.CutFeatureOperation if FUSION_AVAILABLE else 2
 
     # 1. Main rail body
     sketch_rail = sketches.add(plane_xy)
@@ -442,7 +442,11 @@ def build_horizontal_rail_component(comp: Any, params: FrunkParameters, offset_x
     s2 = _create_point(ox + l_cm, oy + slot_w_cm / 2.0, 0.0)
     sketch_slot.sketchCurves.sketchLines.addTwoPointRectangle(s1, s2)
 
-    # 3. Male dovetail tab at +X
+    slot_profs = _get_all_profiles(sketch_slot)
+    if slot_profs:
+        _extrude_simple(comp, slot_profs[0], _create_value_real(-slot_d_cm), op_cut)
+
+    # 3. Male dovetail at +X end
     sketch_dt = sketches.add(plane_xy)
     male_pts = calculate_dovetail_profile(male=True, tol=params.tol_dovetail_mm)
     dt_pts = [_create_point(ox + l_cm + p[1] / 10.0, oy + p[0] / 10.0, 0.0) for p in male_pts]
@@ -465,6 +469,7 @@ def build_junction_components(comp: Any, params: FrunkParameters, offset_x: floa
     block_h_cm = params.truss_height_cm
     op_new = adsk.fusion.FeatureOperations.NewBodyFeatureOperation if FUSION_AVAILABLE else 0
     op_join = adsk.fusion.FeatureOperations.JoinFeatureOperation if FUSION_AVAILABLE else 1
+    op_cut = adsk.fusion.FeatureOperations.CutFeatureOperation if FUSION_AVAILABLE else 2
 
     configs = [
         ("J_Corner_90", offset_x, offset_y, [(1, 0), (0, 1)]),
@@ -503,11 +508,23 @@ def build_junction_components(comp: Any, params: FrunkParameters, offset_x: floa
         if dt_profs:
             _extrude_simple(comp, dt_profs[0], _create_value_real(block_h_cm), op_join)
 
+        # Socket cut (20x20mm pocket)
+        sketch_socket = sketches.add(plane_xy)
+        soc_w = 2.0
+        sp1 = _create_point(ox - soc_w / 2.0, oy - soc_w / 2.0, 0.0)
+        sp2 = _create_point(ox + soc_w / 2.0, oy + soc_w / 2.0, 0.0)
+        sketch_socket.sketchCurves.sketchLines.addTwoPointRectangle(sp1, sp2)
+
+        soc_profs = _get_all_profiles(sketch_socket)
+        if soc_profs:
+            _extrude_simple(comp, soc_profs[0], _create_value_real(-2.5), op_cut)
+
 
 def build_divider_panel_component(comp: Any, params: FrunkParameters, offset_x: float = 0.0, offset_y: float = -320.0):
     """
-    Builds the 12x11-inch Slide-in Divider Panel (`DIV_Crosshatch_12x11`)
-    with 10mm solid perimeter frame, top handle, and 45-degree diamond lattice struts.
+    Builds the 12x11-inch Slide-in Divider Panel (`DIV_Crosshatch_12x11`).
+    First creates a solid 298x275x5mm plate, then punches through all 45-degree diamond
+    mesh windows and the top ergonomic pull-handle.
     """
     sketches = comp.sketches
     plane_xy = comp.xYConstructionPlane if hasattr(comp, "xYConstructionPlane") else None
@@ -520,58 +537,42 @@ def build_divider_panel_component(comp: Any, params: FrunkParameters, offset_x: 
     oy = offset_y / 10.0
 
     op_new = adsk.fusion.FeatureOperations.NewBodyFeatureOperation if FUSION_AVAILABLE else 0
-    op_join = adsk.fusion.FeatureOperations.JoinFeatureOperation if FUSION_AVAILABLE else 1
+    op_cut = adsk.fusion.FeatureOperations.CutFeatureOperation if FUSION_AVAILABLE else 2
 
-    # 1. Outer perimeter bezel
-    sketch_bezel = sketches.add(plane_xy)
+    # 1. Solid rectangular panel plate
+    sketch_plate = sketches.add(plane_xy)
     p_out1 = _create_point(ox, oy, 0.0)
     p_out2 = _create_point(ox + w_cm, oy + h_cm, 0.0)
-    sketch_bezel.sketchCurves.sketchLines.addTwoPointRectangle(p_out1, p_out2)
+    sketch_plate.sketchCurves.sketchLines.addTwoPointRectangle(p_out1, p_out2)
 
-    p_in1 = _create_point(ox + bezel_cm, oy + bezel_cm, 0.0)
-    p_in2 = _create_point(ox + w_cm - bezel_cm, oy + h_cm - bezel_cm, 0.0)
-    sketch_bezel.sketchCurves.sketchLines.addTwoPointRectangle(p_in1, p_in2)
-
-    bezel_profs = _get_all_profiles(sketch_bezel)
-    if bezel_profs:
-        _extrude_simple(comp, bezel_profs[0], _create_value_real(t_cm), op_new)
+    plate_profs = _get_all_profiles(sketch_plate)
+    if plate_profs:
+        _extrude_simple(comp, plate_profs[0], _create_value_real(t_cm), op_new)
         _name_last_body(comp, "DIV_Crosshatch_12x11")
 
-    # 2. 45-degree Diamond Lattice Struts
+    # 2. 45-degree Diamond Mesh Cutouts (Punches through all apertures)
     inner_w_mm = params.panel_width_mm - 20.0
     inner_h_mm = params.panel_height_mm - 20.0
-    segments = calculate_diamond_lattice_segments(
-        width=inner_w_mm,
-        height=inner_h_mm,
+    apertures = calculate_diamond_apertures(
+        inner_w=inner_w_mm,
+        inner_h=inner_h_mm,
         pitch=params.lattice_pitch_mm,
-        strut_w=params.lattice_strut_mm
+        strut_w=params.lattice_strut_mm,
+        margin=2.0
     )
 
-    w_strut_cm = (params.lattice_strut_mm / 10.0) / (2.0 * math.sqrt(2))
-    sketch_lattice = sketches.add(plane_xy)
+    sketch_cutouts = sketches.add(plane_xy)
+    for diamond in apertures:
+        pts = [_create_point(ox + bezel_cm + p[0] / 10.0, oy + bezel_cm + p[1] / 10.0, 0.0) for p in diamond]
+        lines = sketch_cutouts.sketchCurves.sketchLines
+        for i in range(4):
+            lines.addByTwoPoints(pts[i], pts[(i + 1) % 4])
 
-    # Draw solid strip polygon for each diagonal segment
-    for (x1, y1), (x2, y2) in segments:
-        ax, ay = ox + bezel_cm + x1 / 10.0, oy + bezel_cm + y1 / 10.0
-        bx, by = ox + bezel_cm + x2 / 10.0, oy + bezel_cm + y2 / 10.0
+    cut_profs = _get_all_profiles(sketch_cutouts)
+    for cp in cut_profs:
+        _extrude_simple(comp, cp, _create_value_real(-t_cm), op_cut)
 
-        # Offset corners for strut thickness
-        p_a1 = _create_point(ax - w_strut_cm, ay + w_strut_cm, 0.0)
-        p_a2 = _create_point(ax + w_strut_cm, ay - w_strut_cm, 0.0)
-        p_b1 = _create_point(bx - w_strut_cm, by + w_strut_cm, 0.0)
-        p_b2 = _create_point(bx + w_strut_cm, by - w_strut_cm, 0.0)
-
-        lines = sketch_lattice.sketchCurves.sketchLines
-        lines.addByTwoPoints(p_a1, p_b1)
-        lines.addByTwoPoints(p_b1, p_b2)
-        lines.addByTwoPoints(p_b2, p_a2)
-        lines.addByTwoPoints(p_a2, p_a1)
-
-    lattice_profs = _get_all_profiles(sketch_lattice)
-    for prof in lattice_profs:
-        _extrude_simple(comp, prof, _create_value_real(t_cm), op_join)
-
-    # 3. Top Handle Sketch
+    # 3. Top Handle Cutout
     sketch_handle = sketches.add(plane_xy)
     handle_w_cm = 8.0
     handle_h_cm = 2.2
@@ -579,6 +580,10 @@ def build_divider_panel_component(comp: Any, params: FrunkParameters, offset_x: 
     hp1 = _create_point(mid_x - handle_w_cm / 2.0, oy + h_cm - bezel_cm - handle_h_cm, 0.0)
     hp2 = _create_point(mid_x + handle_w_cm / 2.0, oy + h_cm - bezel_cm, 0.0)
     sketch_handle.sketchCurves.sketchLines.addTwoPointRectangle(hp1, hp2)
+
+    handle_profs = _get_all_profiles(sketch_handle)
+    if handle_profs:
+        _extrude_simple(comp, handle_profs[0], _create_value_real(-t_cm), op_cut)
 
 
 def build_locking_pin_component(comp: Any, params: FrunkParameters, offset_x: float = 350.0, offset_y: float = 180.0):
@@ -666,14 +671,14 @@ def run(context=None):
         if ui:
             ui.messageBox(
                 "Tesla Model X Frunk Modular Divider System Generated Successfully!\n\n"
-                "All 8 modular bodies have been generated and laid out side-by-side in your workspace:\n\n"
+                "All 8 modular solid bodies have been generated and laid out side-by-side in your workspace:\n\n"
                 "  1. FT_Segment_12in (Floor Truss with web cutouts & dovetails)\n"
                 "  2. VR_Post_Deep (11\" Vertical Rib with 6.4mm slots)\n"
                 "  3. HR_Rail_12in (Horizontal Top Tie Rail)\n"
                 "  4. J_Corner_90 (2-Way 90° Corner Junction)\n"
                 "  5. J_Tee_3Way (3-Way T-Junction)\n"
                 "  6. J_Cross_4Way (4-Way Cross Junction)\n"
-                "  7. DIV_Crosshatch_12x11 (Solid 45° Diamond Lattice Divider)\n"
+                "  7. DIV_Crosshatch_12x11 (45° Diamond Lattice Mesh Divider)\n"
                 "  8. Pin_Lock_M5 (Transverse Locking Pin)\n\n"
                 "Check the 'Bodies' folder in your Browser Tree on the left to view, isolate, or export any component!",
                 "Generation Complete"
