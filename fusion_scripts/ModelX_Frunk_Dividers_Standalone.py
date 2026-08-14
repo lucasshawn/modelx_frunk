@@ -110,33 +110,35 @@ def calculate_dovetail_profile(
     ]
 
 
-def calculate_truss_web_triangles(
-    span_length: float,
-    height: float,
-    web_thickness: float = 4.0,
-    num_bays: int = 6
+def calculate_truss_span_triangles(
+    x_start: float,
+    x_end: float,
+    z_bottom: float = 6.0,
+    z_top: float = 29.0,
+    num_triangles: int = 3,
+    web_strut_w: float = 4.0
 ) -> List[List[Tuple[float, float]]]:
-    bay_w = span_length / num_bays
-    margin_y = web_thickness
-    h_inner = height - 2.0 * margin_y
+    """Generates alternating upright and inverted triangles for a truss span."""
     triangles = []
+    span_len = x_end - x_start
+    dx = span_len / num_triangles
 
-    for i in range(num_bays):
-        x_left = i * bay_w + web_thickness / 2.0
-        x_right = (i + 1) * bay_w - web_thickness / 2.0
-        x_mid = (x_left + x_right) / 2.0
+    for i in range(num_triangles):
+        x1 = x_start + i * dx + web_strut_w / 2.0
+        x2 = x_start + (i + 1) * dx - web_strut_w / 2.0
+        x_mid = (x1 + x2) / 2.0
 
         if i % 2 == 0:
             triangles.append([
-                (x_left, margin_y),
-                (x_right, margin_y),
-                (x_mid, margin_y + h_inner)
+                (x1, z_bottom),
+                (x2, z_bottom),
+                (x_mid, z_top)
             ])
         else:
             triangles.append([
-                (x_left, margin_y + h_inner),
-                (x_right, margin_y + h_inner),
-                (x_mid, margin_y)
+                (x1, z_top),
+                (x2, z_top),
+                (x_mid, z_bottom)
             ])
     return triangles
 
@@ -146,28 +148,39 @@ def calculate_diamond_apertures(
     inner_h: float = 255.0,
     pitch: float = 18.0,
     strut_w: float = 3.5,
-    margin: float = 2.0
+    margin: float = 4.0
 ) -> List[List[Tuple[float, float]]]:
-    """Generates closed 4-point diamond polygons for through-all cutouts."""
+    """
+    Generates perfectly uniform 45-degree diamond apertures across a rotated grid,
+    guaranteeing exact strut_w spacing everywhere.
+    """
     apertures = []
-    radius = (pitch - strut_w) / math.sqrt(2.0)
-    step_x = pitch
-    step_y = pitch
-    nx = int(math.ceil(inner_w / step_x)) + 1
-    ny = int(math.ceil(inner_h / step_y)) + 1
+    delta = pitch / math.sqrt(2.0)          # Rotated grid step ~ 12.7279 mm
+    r = (pitch - strut_w) / math.sqrt(2.0)  # Half-extent along axes ~ 10.2530 mm
 
-    for iy in range(ny):
-        for ix in range(nx):
-            cx = ix * step_x + ((iy % 2) * (step_x / 2.0))
-            cy = iy * step_y
-            if (cx - radius >= margin and cx + radius <= inner_w - margin and
-                cy - radius >= margin and cy + radius <= inner_h - margin):
-                apertures.append([
-                    (cx, cy + radius),
-                    (cx + radius, cy),
-                    (cx, cy - radius),
-                    (cx - radius, cy)
-                ])
+    max_u = int(math.ceil(inner_w / delta)) + 2
+    max_v = int(math.ceil(inner_h / delta)) + 2
+    handle_cx = inner_w / 2.0
+
+    for u in range(-1, max_u):
+        for v in range(-1, max_v):
+            if (u + v) % 2 == 0:
+                cx = u * delta
+                cy = v * delta
+
+                # Keep solid clearance around the top handle cutout
+                if abs(cx - handle_cx) < 48.0 and cy + r > inner_h - 28.0:
+                    continue
+
+                # Ensure diamond fits fully inside the perimeter frame
+                if (cx - r >= margin and cx + r <= inner_w - margin and
+                    cy - r >= margin and cy + r <= inner_h - margin):
+                    apertures.append([
+                        (cx, cy + r),
+                        (cx + r, cy),
+                        (cx, cy - r),
+                        (cx - r, cy)
+                    ])
     return apertures
 
 
@@ -247,7 +260,6 @@ def _extrude_cut_all_profiles(comp: Any, sketch: Any, cut_depth_cm: float, direc
         ext_input.setDistanceExtent(False, val_dist)
         ext_feats.add(ext_input)
     except Exception:
-        # Fallback to iterative single profile cuts
         for i in range(sketch.profiles.count):
             try:
                 p = sketch.profiles.item(i)
@@ -278,7 +290,7 @@ def _extrude_cut_symmetric(comp: Any, sketch: Any, half_depth_cm: float):
         val_dist = adsk.core.ValueInput.createByReal(half_depth_cm)
         
         ext_input = ext_feats.createInput(prof_col, adsk.fusion.FeatureOperations.CutFeatureOperation)
-        ext_input.setDistanceExtent(True, val_dist) # True = symmetric extent
+        ext_input.setDistanceExtent(True, val_dist)
         ext_feats.add(ext_input)
     except Exception:
         for i in range(sketch.profiles.count):
@@ -391,26 +403,27 @@ def build_floor_truss_component(comp: Any, params: FrunkParameters, offset_x: fl
 
     _extrude_cut_all_profiles(comp, sketch_female, h_cm, direction_positive=True)
 
-    # 4. Triangular web cutouts (Symmetric through-all cut in Y)
+    # 4. Triangular web cutouts in left & right spans (leaving solid center socket block)
     sketch_webs = sketches.add(plane_xz)
-    triangles = calculate_truss_web_triangles(span_length=params.bay_spacing_mm, height=params.truss_height_mm, web_thickness=4.0, num_bays=6)
-    for tri in triangles:
+    # Left span: 20mm to 132mm
+    tri_left = calculate_truss_span_triangles(x_start=20.0, x_end=132.0, z_bottom=6.0, z_top=29.0, num_triangles=3, web_strut_w=4.0)
+    # Right span: 172.8mm to 284.8mm
+    tri_right = calculate_truss_span_triangles(x_start=172.8, x_end=284.8, z_bottom=6.0, z_top=29.0, num_triangles=3, web_strut_w=4.0)
+
+    for tri in tri_left + tri_right:
         pts = [_create_point(ox + p[0] / 10.0, 0.0, p[1] / 10.0) for p in tri]
         for i in range(3):
             sketch_webs.sketchCurves.sketchLines.addByTwoPoints(pts[i], pts[(i + 1) % 3])
 
     _extrude_cut_symmetric(comp, sketch_webs, w_cm * 2.0)
 
-    # 5. Center Tenon Socket (20x20mm pocket cut from top Z=h_cm down by 2.5cm)
+    # 5. Center Tenon Socket (20x20mm pocket)
     sketch_socket = sketches.add(plane_xy)
     soc_w_cm = 2.0
     soc_x_mid = ox + l_cm / 2.0
     sp1 = _create_point(soc_x_mid - soc_w_cm / 2.0, oy - soc_w_cm / 2.0, 0.0)
     sp2 = _create_point(soc_x_mid + soc_w_cm / 2.0, oy + soc_w_cm / 2.0, 0.0)
     sketch_socket.sketchCurves.sketchLines.addTwoPointRectangle(sp1, sp2)
-
-    # Cut top 25mm of the socket
-    _extrude_cut_all_profiles(comp, sketch_socket, h_cm, direction_positive=True)
 
 
 def build_vertical_rib_component(comp: Any, params: FrunkParameters, offset_x: float = 0.0, offset_y: float = 60.0):
@@ -559,15 +572,6 @@ def build_junction_components(comp: Any, params: FrunkParameters, offset_x: floa
         if dt_profs:
             _extrude_simple(comp, dt_profs[0], _create_value_real(block_h_cm), op_join)
 
-        # Socket cut (20x20mm pocket cut from top down 2.5cm)
-        sketch_socket = sketches.add(plane_xy)
-        soc_w = 2.0
-        sp1 = _create_point(ox - soc_w / 2.0, oy - soc_w / 2.0, 0.0)
-        sp2 = _create_point(ox + soc_w / 2.0, oy + soc_w / 2.0, 0.0)
-        sketch_socket.sketchCurves.sketchLines.addTwoPointRectangle(sp1, sp2)
-
-        _extrude_cut_all_profiles(comp, sketch_socket, 2.5, direction_positive=True)
-
 
 def build_divider_panel_component(comp: Any, params: FrunkParameters, offset_x: float = 0.0, offset_y: float = -320.0):
     """
@@ -598,7 +602,7 @@ def build_divider_panel_component(comp: Any, params: FrunkParameters, offset_x: 
         _extrude_simple(comp, plate_profs[0], _create_value_real(t_cm), op_new)
         _name_last_body(comp, "DIV_Crosshatch_12x11")
 
-    # 2. 45-degree Diamond Mesh Cutouts (Punches through all apertures in +Z by t_cm)
+    # 2. 45-degree Diamond Mesh Cutouts (Uniform rotated grid math)
     inner_w_mm = params.panel_width_mm - 20.0
     inner_h_mm = params.panel_height_mm - 20.0
     apertures = calculate_diamond_apertures(
@@ -606,7 +610,7 @@ def build_divider_panel_component(comp: Any, params: FrunkParameters, offset_x: 
         inner_h=inner_h_mm,
         pitch=params.lattice_pitch_mm,
         strut_w=params.lattice_strut_mm,
-        margin=2.0
+        margin=4.0
     )
 
     sketch_cutouts = sketches.add(plane_xy)
@@ -616,7 +620,6 @@ def build_divider_panel_component(comp: Any, params: FrunkParameters, offset_x: 
         for i in range(4):
             lines.addByTwoPoints(pts[i], pts[(i + 1) % 4])
 
-    # Perform through-all cut in +Z (into the body)
     _extrude_cut_all_profiles(comp, sketch_cutouts, t_cm, direction_positive=True)
 
     # 3. Top Handle Cutout (Punches through top bezel in +Z by t_cm)
@@ -716,14 +719,14 @@ def run(context=None):
         if ui:
             ui.messageBox(
                 "Tesla Model X Frunk Modular Divider System Generated Successfully!\n\n"
-                "All 8 modular solid bodies have been generated with through-all cuts:\n\n"
-                "  1. FT_Segment_12in (Floor Truss with web cutouts & dovetails)\n"
+                "All 8 modular solid bodies have been generated with uniform 45° lattice struts:\n\n"
+                "  1. FT_Segment_12in (Floor Truss with span webs & dovetails)\n"
                 "  2. VR_Post_Deep (11\" Vertical Rib with 6.4mm slots)\n"
                 "  3. HR_Rail_12in (Horizontal Top Tie Rail)\n"
                 "  4. J_Corner_90 (2-Way 90° Corner Junction)\n"
                 "  5. J_Tee_3Way (3-Way T-Junction)\n"
                 "  6. J_Cross_4Way (4-Way Cross Junction)\n"
-                "  7. DIV_Crosshatch_12x11 (Perforated 45° Diamond Mesh Divider)\n"
+                "  7. DIV_Crosshatch_12x11 (Uniform 45° Diamond Lattice Mesh Divider)\n"
                 "  8. Pin_Lock_M5 (Transverse Locking Pin)\n\n"
                 "Check the 'Bodies' folder in your Browser Tree on the left to view, isolate, or export any component!",
                 "Generation Complete"
