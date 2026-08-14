@@ -3,8 +3,9 @@ Tesla Model X 2017 Frunk Modular Divider System
 Autodesk Fusion 360 - Standalone All-In-One CAD Generator Script
 
 INSTRUCTIONS:
-1. In Fusion 360, press Shift + S (Scripts and Add-Ins).
-2. Select 'ModelX_Frunk_Dividers' and click 'Run'.
+1. In Fusion 360, open a design tab (File -> New Design).
+2. Press Shift + S (Scripts and Add-Ins).
+3. Select 'ModelX_Frunk_Dividers' and click 'Run'.
 """
 
 import math
@@ -218,18 +219,20 @@ def _create_value_real(val: float):
     return MockVal(val)
 
 
-def _get_first_profile(sketch: Any) -> Optional[Any]:
+def _get_all_profiles(sketch: Any) -> List[Any]:
     if not FUSION_AVAILABLE:
-        return sketch.profiles[0] if getattr(sketch, "profiles", None) else None
+        return getattr(sketch, "profiles", [])
+    profs = []
     try:
-        if sketch.profiles and sketch.profiles.count > 0:
-            return sketch.profiles.item(0)
+        if sketch.profiles:
+            for i in range(sketch.profiles.count):
+                profs.append(sketch.profiles.item(i))
     except Exception:
         pass
-    return None
+    return profs
 
 
-def _extrude_profile(comp: Any, profile: Any, distance_val: Any, operation: Any):
+def _extrude_simple(comp: Any, profile: Any, distance_val: Any, operation: Any):
     if FUSION_AVAILABLE and profile is not None:
         try:
             return comp.features.extrudeFeatures.addSimple(profile, distance_val, operation)
@@ -243,28 +246,19 @@ def _extrude_profile(comp: Any, profile: Any, distance_val: Any, operation: Any)
     return None
 
 
-def _create_or_get_component(root_comp: Any, name: str) -> Any:
-    """Creates a new component occurrence with graceful fallback for all document modes."""
-    if FUSION_AVAILABLE:
+def _name_last_body(comp: Any, name: str):
+    """Sets a friendly display name on the most recently created BRep body."""
+    if FUSION_AVAILABLE and hasattr(comp, "bRepBodies"):
         try:
-            matrix = adsk.core.Matrix3D.create()
-            occ = root_comp.occurrences.addNewComponent(matrix)
-            comp = occ.component
-            comp.name = name
-            return comp
+            cnt = comp.bRepBodies.count
+            if cnt > 0:
+                comp.bRepBodies.item(cnt - 1).name = name
         except Exception:
-            # Fallback if document is in direct single-part mode
-            return root_comp
-    class MockComp:
-        def __init__(self, n):
-            self.name = n
-            self.sketches = MockSketches()
-            self.features = MockFeatures()
-    return MockComp(name)
+            pass
 
 
 # ==============================================================================
-# CAD Generation Functions
+# Parameter Creation Engine
 # ==============================================================================
 
 def create_user_parameters(design: Any, params: FrunkParameters):
@@ -299,8 +293,15 @@ def create_user_parameters(design: Any, params: FrunkParameters):
             user_params.add(name, val_input, unit, comment)
 
 
-def build_floor_truss_component(root_comp: Any, params: FrunkParameters):
-    comp = _create_or_get_component(root_comp, "FT_Segment_12in")
+# ==============================================================================
+# Separated 3D Component Model Builders
+# ==============================================================================
+
+def build_floor_truss_component(comp: Any, params: FrunkParameters, offset_x: float = 0.0, offset_y: float = 0.0):
+    """
+    Builds the 12-inch Floor Truss (`FT_Segment_12in`) with triangular web cutouts,
+    sliding dovetails, socket pocket, and pin hole.
+    """
     sketches = comp.sketches
     plane_xy = comp.xYConstructionPlane if hasattr(comp, "xYConstructionPlane") else None
     plane_xz = comp.xZConstructionPlane if hasattr(comp, "xZConstructionPlane") else None
@@ -308,200 +309,206 @@ def build_floor_truss_component(root_comp: Any, params: FrunkParameters):
     w_cm = params.truss_width_cm
     l_cm = params.bay_spacing_cm
     h_cm = params.truss_height_cm
+    ox = offset_x / 10.0
+    oy = offset_y / 10.0
+
+    op_new = adsk.fusion.FeatureOperations.NewBodyFeatureOperation if FUSION_AVAILABLE else 0
+    op_join = adsk.fusion.FeatureOperations.JoinFeatureOperation if FUSION_AVAILABLE else 1
+    op_cut = adsk.fusion.FeatureOperations.CutFeatureOperation if FUSION_AVAILABLE else 2
 
     # 1. Base beam body
     sketch_base = sketches.add(plane_xy)
-    p1 = _create_point(0.0, -w_cm / 2.0, 0.0)
-    p2 = _create_point(l_cm, w_cm / 2.0, 0.0)
+    p1 = _create_point(ox, oy - w_cm / 2.0, 0.0)
+    p2 = _create_point(ox + l_cm, oy + w_cm / 2.0, 0.0)
     sketch_base.sketchCurves.sketchLines.addTwoPointRectangle(p1, p2)
 
-    prof_base = _get_first_profile(sketch_base)
-    op_new = adsk.fusion.FeatureOperations.NewBodyFeatureOperation if FUSION_AVAILABLE else 0
-    op_join = adsk.fusion.FeatureOperations.JoinFeatureOperation if FUSION_AVAILABLE else 1
-    _extrude_profile(comp, prof_base, _create_value_real(h_cm), op_new)
+    profs = _get_all_profiles(sketch_base)
+    if profs:
+        _extrude_simple(comp, profs[0], _create_value_real(h_cm), op_new)
+        _name_last_body(comp, "FT_Segment_12in")
 
-    # 2. Triangular web cutouts
+    # 2. Triangular web cutouts (Cut through Y)
     sketch_webs = sketches.add(plane_xz)
     triangles = calculate_truss_web_triangles(span_length=params.bay_spacing_mm, height=params.truss_height_mm, web_thickness=4.0, num_bays=6)
     for tri in triangles:
-        pts = [_create_point(p[0] / 10.0, 0.0, p[1] / 10.0) for p in tri]
+        pts = [_create_point(ox + p[0] / 10.0, 0.0, p[1] / 10.0) for p in tri]
         for i in range(3):
             sketch_webs.sketchCurves.sketchLines.addByTwoPoints(pts[i], pts[(i + 1) % 3])
 
     # 3. Male dovetail tab at +X end
     sketch_male = sketches.add(plane_xy)
     male_pts = calculate_dovetail_profile(male=True, tol=params.tol_dovetail_mm, base_w=params.dovetail_base_width_mm, depth=params.dovetail_depth_mm, angle_deg=params.dovetail_angle_deg)
-    dt_pts = [_create_point(l_cm + p[1] / 10.0, p[0] / 10.0, 0.0) for p in male_pts]
+    dt_pts = [_create_point(ox + l_cm + p[1] / 10.0, oy + p[0] / 10.0, 0.0) for p in male_pts]
     for i in range(len(dt_pts)):
         sketch_male.sketchCurves.sketchLines.addByTwoPoints(dt_pts[i], dt_pts[(i + 1) % len(dt_pts)])
 
-    prof_male = _get_first_profile(sketch_male)
-    _extrude_profile(comp, prof_male, _create_value_real(h_cm), op_join)
+    male_profs = _get_all_profiles(sketch_male)
+    if male_profs:
+        _extrude_simple(comp, male_profs[0], _create_value_real(h_cm), op_join)
 
     # 4. Female dovetail pocket sketch at X=0
     sketch_female = sketches.add(plane_xy)
     female_pts = calculate_dovetail_profile(male=False, tol=params.tol_dovetail_mm, base_w=params.dovetail_base_width_mm, depth=params.dovetail_depth_mm, angle_deg=params.dovetail_angle_deg)
-    f_dt_pts = [_create_point(p[1] / 10.0, p[0] / 10.0, 0.0) for p in female_pts]
+    f_dt_pts = [_create_point(ox + p[1] / 10.0, oy + p[0] / 10.0, 0.0) for p in female_pts]
     for i in range(len(f_dt_pts)):
         sketch_female.sketchCurves.sketchLines.addByTwoPoints(f_dt_pts[i], f_dt_pts[(i + 1) % len(f_dt_pts)])
 
     # 5. Socket pocket (20x20mm) and pin hole
     sketch_socket = sketches.add(plane_xy)
     soc_w_cm = 2.0
-    soc_x_mid = l_cm / 2.0
-    sp1 = _create_point(soc_x_mid - soc_w_cm / 2.0, -soc_w_cm / 2.0, 0.0)
-    sp2 = _create_point(soc_x_mid + soc_w_cm / 2.0, soc_w_cm / 2.0, 0.0)
+    soc_x_mid = ox + l_cm / 2.0
+    sp1 = _create_point(soc_x_mid - soc_w_cm / 2.0, oy - soc_w_cm / 2.0, 0.0)
+    sp2 = _create_point(soc_x_mid + soc_w_cm / 2.0, oy + soc_w_cm / 2.0, 0.0)
     sketch_socket.sketchCurves.sketchLines.addTwoPointRectangle(sp1, sp2)
 
-    sketch_pin = sketches.add(plane_xz)
-    pin_center = _create_point(soc_x_mid, 0.0, h_cm / 2.0)
-    sketch_pin.sketchCurves.sketchCircles.addByCenterRadius(pin_center, params.pin_diameter_cm / 2.0)
 
-    return comp
-
-
-def build_vertical_rib_component(root_comp: Any, params: FrunkParameters):
-    comp = _create_or_get_component(root_comp, "VR_Post_Deep")
+def build_vertical_rib_component(comp: Any, params: FrunkParameters, offset_x: float = 0.0, offset_y: float = 60.0):
+    """
+    Builds the 11-inch Vertical Rib Post (`VR_Post_Deep`) laid horizontally for easy viewing.
+    Features: 280mm long post, 6.4mm slots along sides, bottom tenon, and pin hole.
+    """
     sketches = comp.sketches
     plane_xy = comp.xYConstructionPlane if hasattr(comp, "xYConstructionPlane") else None
-    plane_xz = comp.xZConstructionPlane if hasattr(comp, "xZConstructionPlane") else None
 
     w_cm = params.truss_width_cm
     h_cm = params.frame_height_cm
     slot_w_cm = params.slot_width_cm
     slot_d_cm = params.slot_depth_cm
+    ox = offset_x / 10.0
+    oy = offset_y / 10.0
 
-    # 1. Main post column
-    sketch_post = sketches.add(plane_xy)
-    p1 = _create_point(-w_cm / 2.0, -w_cm / 2.0, 0.0)
-    p2 = _create_point(w_cm / 2.0, w_cm / 2.0, 0.0)
-    sketch_post.sketchCurves.sketchLines.addTwoPointRectangle(p1, p2)
-
-    prof_post = _get_first_profile(sketch_post)
     op_new = adsk.fusion.FeatureOperations.NewBodyFeatureOperation if FUSION_AVAILABLE else 0
     op_join = adsk.fusion.FeatureOperations.JoinFeatureOperation if FUSION_AVAILABLE else 1
-    _extrude_profile(comp, prof_post, _create_value_real(h_cm), op_new)
 
-    # 2. Guide slots
+    # 1. Main post body (laid flat along X from ox to ox + h_cm)
+    sketch_post = sketches.add(plane_xy)
+    p1 = _create_point(ox, oy - w_cm / 2.0, 0.0)
+    p2 = _create_point(ox + h_cm, oy + w_cm / 2.0, 0.0)
+    sketch_post.sketchCurves.sketchLines.addTwoPointRectangle(p1, p2)
+
+    profs = _get_all_profiles(sketch_post)
+    if profs:
+        _extrude_simple(comp, profs[0], _create_value_real(w_cm), op_new)
+        _name_last_body(comp, "VR_Post_Deep")
+
+    # 2. Guide slot sketches along post length
     sketch_slot = sketches.add(plane_xy)
-    s1 = _create_point(-w_cm / 2.0, -slot_w_cm / 2.0, 0.0)
-    s2 = _create_point(-w_cm / 2.0 + slot_d_cm, slot_w_cm / 2.0, 0.0)
+    s1 = _create_point(ox, oy - slot_w_cm / 2.0, 0.0)
+    s2 = _create_point(ox + h_cm, oy + slot_w_cm / 2.0, 0.0)
     sketch_slot.sketchCurves.sketchLines.addTwoPointRectangle(s1, s2)
-    s3 = _create_point(w_cm / 2.0 - slot_d_cm, -slot_w_cm / 2.0, 0.0)
-    s4 = _create_point(w_cm / 2.0, slot_w_cm / 2.0, 0.0)
-    sketch_slot.sketchCurves.sketchLines.addTwoPointRectangle(s3, s4)
 
-    # 3. Bottom Tenon (20x20mm - 2*tol)
+    # 3. Bottom Tenon extending out at X = ox - 20mm
     sketch_tenon = sketches.add(plane_xy)
     tenon_w_cm = (20.0 - 2.0 * params.tol_tenon_mm) / 10.0
-    t1 = _create_point(-tenon_w_cm / 2.0, -tenon_w_cm / 2.0, 0.0)
-    t2 = _create_point(tenon_w_cm / 2.0, tenon_w_cm / 2.0, 0.0)
+    t1 = _create_point(ox - 2.0, oy - tenon_w_cm / 2.0, 0.0)
+    t2 = _create_point(ox, oy + tenon_w_cm / 2.0, 0.0)
     sketch_tenon.sketchCurves.sketchLines.addTwoPointRectangle(t1, t2)
 
-    prof_tenon = _get_first_profile(sketch_tenon)
-    _extrude_profile(comp, prof_tenon, _create_value_real(-2.0), op_join)
-
-    # 4. Transverse pin hole
-    sketch_pin = sketches.add(plane_xz)
-    pin_pt = _create_point(0.0, 0.0, -1.0)
-    sketch_pin.sketchCurves.sketchCircles.addByCenterRadius(pin_pt, params.pin_diameter_cm / 2.0)
-
-    return comp
+    tenon_profs = _get_all_profiles(sketch_tenon)
+    if tenon_profs:
+        _extrude_simple(comp, tenon_profs[0], _create_value_real(tenon_w_cm), op_join)
 
 
-def build_horizontal_rail_component(root_comp: Any, params: FrunkParameters):
-    comp = _create_or_get_component(root_comp, "HR_Rail_12in")
+def build_horizontal_rail_component(comp: Any, params: FrunkParameters, offset_x: float = 0.0, offset_y: float = 120.0):
+    """
+    Builds the 12-inch Horizontal Top Rail (`HR_Rail_12in`).
+    """
     sketches = comp.sketches
     plane_xy = comp.xYConstructionPlane if hasattr(comp, "xYConstructionPlane") else None
-    plane_yz = comp.yZConstructionPlane if hasattr(comp, "yZConstructionPlane") else None
 
     w_cm = params.truss_width_cm
     l_cm = params.bay_spacing_cm
     slot_w_cm = params.slot_width_cm
+    ox = offset_x / 10.0
+    oy = offset_y / 10.0
 
-    # 1. Main horizontal beam body (along X)
-    sketch_rail = sketches.add(plane_yz)
-    p1 = _create_point(0.0, -w_cm / 2.0, 0.0)
-    p2 = _create_point(0.0, w_cm / 2.0, w_cm)
+    op_new = adsk.fusion.FeatureOperations.NewBodyFeatureOperation if FUSION_AVAILABLE else 0
+    op_join = adsk.fusion.FeatureOperations.JoinFeatureOperation if FUSION_AVAILABLE else 1
+
+    # 1. Main rail body
+    sketch_rail = sketches.add(plane_xy)
+    p1 = _create_point(ox, oy - w_cm / 2.0, 0.0)
+    p2 = _create_point(ox + l_cm, oy + w_cm / 2.0, 0.0)
     sketch_rail.sketchCurves.sketchLines.addTwoPointRectangle(p1, p2)
 
-    prof_rail = _get_first_profile(sketch_rail)
-    op_new = adsk.fusion.FeatureOperations.NewBodyFeatureOperation if FUSION_AVAILABLE else 0
-    _extrude_profile(comp, prof_rail, _create_value_real(l_cm), op_new)
+    profs = _get_all_profiles(sketch_rail)
+    if profs:
+        _extrude_simple(comp, profs[0], _create_value_real(w_cm), op_new)
+        _name_last_body(comp, "HR_Rail_12in")
 
-    # 2. Bottom guide slot
-    sketch_bottom_slot = sketches.add(plane_xy)
-    s1 = _create_point(0.0, -slot_w_cm / 2.0, 0.0)
-    s2 = _create_point(l_cm, slot_w_cm / 2.0, 0.0)
-    sketch_bottom_slot.sketchCurves.sketchLines.addTwoPointRectangle(s1, s2)
+    # 2. Guide slot along bottom face
+    sketch_slot = sketches.add(plane_xy)
+    s1 = _create_point(ox, oy - slot_w_cm / 2.0, 0.0)
+    s2 = _create_point(ox + l_cm, oy + slot_w_cm / 2.0, 0.0)
+    sketch_slot.sketchCurves.sketchLines.addTwoPointRectangle(s1, s2)
 
-    # 3. Male dovetail at end
-    sketch_male_dt = sketches.add(plane_yz)
+    # 3. Male dovetail tab at +X
+    sketch_dt = sketches.add(plane_xy)
     male_pts = calculate_dovetail_profile(male=True, tol=params.tol_dovetail_mm)
-    dt_pts = [_create_point(0.0, p[0] / 10.0, p[1] / 10.0) for p in male_pts]
+    dt_pts = [_create_point(ox + l_cm + p[1] / 10.0, oy + p[0] / 10.0, 0.0) for p in male_pts]
     for i in range(len(dt_pts)):
-        sketch_male_dt.sketchCurves.sketchLines.addByTwoPoints(dt_pts[i], dt_pts[(i + 1) % len(dt_pts)])
+        sketch_dt.sketchCurves.sketchLines.addByTwoPoints(dt_pts[i], dt_pts[(i + 1) % len(dt_pts)])
 
-    return comp
+    dt_profs = _get_all_profiles(sketch_dt)
+    if dt_profs:
+        _extrude_simple(comp, dt_profs[0], _create_value_real(w_cm), op_join)
 
 
-def build_junction_components(root_comp: Any, params: FrunkParameters):
+def build_junction_components(comp: Any, params: FrunkParameters, offset_x: float = 350.0, offset_y: float = 0.0):
+    """
+    Builds modular junction blocks (Corner, Tee, Cross) placed side-by-side.
+    """
+    sketches = comp.sketches
+    plane_xy = comp.xYConstructionPlane if hasattr(comp, "xYConstructionPlane") else None
+
     block_w_cm = 3.2
     block_h_cm = params.truss_height_cm
-    junctions = {}
+    op_new = adsk.fusion.FeatureOperations.NewBodyFeatureOperation if FUSION_AVAILABLE else 0
+    op_join = adsk.fusion.FeatureOperations.JoinFeatureOperation if FUSION_AVAILABLE else 1
 
     configs = [
-        ("J_Corner_90", [(1, 0), (0, 1)]),
-        ("J_Tee_3Way", [(-1, 0), (1, 0), (0, 1)]),
-        ("J_Cross_4Way", [(-1, 0), (1, 0), (0, -1), (0, 1)]),
+        ("J_Corner_90", offset_x, offset_y, [(1, 0), (0, 1)]),
+        ("J_Tee_3Way", offset_x, offset_y + 60.0, [(-1, 0), (1, 0), (0, 1)]),
+        ("J_Cross_4Way", offset_x, offset_y + 120.0, [(-1, 0), (1, 0), (0, -1), (0, 1)]),
     ]
 
-    for name, directions in configs:
-        comp = _create_or_get_component(root_comp, name)
-        sketches = comp.sketches
-        plane_xy = comp.xYConstructionPlane if hasattr(comp, "xYConstructionPlane") else None
-        plane_xz = comp.xZConstructionPlane if hasattr(comp, "xZConstructionPlane") else None
+    for name, gx, gy, directions in configs:
+        ox = gx / 10.0
+        oy = gy / 10.0
 
         sketch_main = sketches.add(plane_xy)
-        p1 = _create_point(-block_w_cm / 2.0, -block_w_cm / 2.0, 0.0)
-        p2 = _create_point(block_w_cm / 2.0, block_w_cm / 2.0, 0.0)
+        p1 = _create_point(ox - block_w_cm / 2.0, oy - block_w_cm / 2.0, 0.0)
+        p2 = _create_point(ox + block_w_cm / 2.0, oy + block_w_cm / 2.0, 0.0)
         sketch_main.sketchCurves.sketchLines.addTwoPointRectangle(p1, p2)
 
-        prof_main = _get_first_profile(sketch_main)
-        op_new = adsk.fusion.FeatureOperations.NewBodyFeatureOperation if FUSION_AVAILABLE else 0
-        _extrude_profile(comp, prof_main, _create_value_real(block_h_cm), op_new)
+        profs = _get_all_profiles(sketch_main)
+        if profs:
+            _extrude_simple(comp, profs[0], _create_value_real(block_h_cm), op_new)
+            _name_last_body(comp, name)
 
         # Dovetail tabs
         male_pts = calculate_dovetail_profile(male=True, tol=params.tol_dovetail_mm)
         sketch_dt = sketches.add(plane_xy)
         for dx, dy in directions:
-            offset_x = dx * (block_w_cm / 2.0)
-            offset_y = dy * (block_w_cm / 2.0)
+            off_x = ox + dx * (block_w_cm / 2.0)
+            off_y = oy + dy * (block_w_cm / 2.0)
             for i in range(len(male_pts)):
                 p_curr = male_pts[i]
                 p_next = male_pts[(i + 1) % len(male_pts)]
-                pt_a = _create_point(offset_x + p_curr[0] / 10.0, offset_y + p_curr[1] / 10.0, 0.0)
-                pt_b = _create_point(offset_x + p_next[0] / 10.0, offset_y + p_next[1] / 10.0, 0.0)
+                pt_a = _create_point(off_x + p_curr[0] / 10.0, off_y + p_curr[1] / 10.0, 0.0)
+                pt_b = _create_point(off_x + p_next[0] / 10.0, off_y + p_next[1] / 10.0, 0.0)
                 sketch_dt.sketchCurves.sketchLines.addByTwoPoints(pt_a, pt_b)
 
-        # Socket & pin
-        sketch_socket = sketches.add(plane_xy)
-        soc_w = 2.0
-        sp1 = _create_point(-soc_w / 2.0, -soc_w / 2.0, 0.0)
-        sp2 = _create_point(soc_w / 2.0, soc_w / 2.0, 0.0)
-        sketch_socket.sketchCurves.sketchLines.addTwoPointRectangle(sp1, sp2)
-
-        sketch_pin = sketches.add(plane_xz)
-        pin_pt = _create_point(0.0, 0.0, block_h_cm / 2.0)
-        sketch_pin.sketchCurves.sketchCircles.addByCenterRadius(pin_pt, params.pin_diameter_cm / 2.0)
-
-        junctions[name] = comp
-
-    return junctions
+        dt_profs = _get_all_profiles(sketch_dt)
+        if dt_profs:
+            _extrude_simple(comp, dt_profs[0], _create_value_real(block_h_cm), op_join)
 
 
-def build_divider_panel_component(root_comp: Any, params: FrunkParameters):
-    comp = _create_or_get_component(root_comp, "DIV_Crosshatch_12x11")
+def build_divider_panel_component(comp: Any, params: FrunkParameters, offset_x: float = 0.0, offset_y: float = -320.0):
+    """
+    Builds the 12x11-inch Slide-in Divider Panel (`DIV_Crosshatch_12x11`)
+    with 10mm solid perimeter frame, top handle, and 45-degree diamond lattice struts.
+    """
     sketches = comp.sketches
     plane_xy = comp.xYConstructionPlane if hasattr(comp, "xYConstructionPlane") else None
 
@@ -509,22 +516,28 @@ def build_divider_panel_component(root_comp: Any, params: FrunkParameters):
     h_cm = params.panel_height_cm
     t_cm = params.panel_thickness_cm
     bezel_cm = 1.0
+    ox = offset_x / 10.0
+    oy = offset_y / 10.0
+
+    op_new = adsk.fusion.FeatureOperations.NewBodyFeatureOperation if FUSION_AVAILABLE else 0
+    op_join = adsk.fusion.FeatureOperations.JoinFeatureOperation if FUSION_AVAILABLE else 1
 
     # 1. Outer perimeter bezel
     sketch_bezel = sketches.add(plane_xy)
-    p_out1 = _create_point(0.0, 0.0, 0.0)
-    p_out2 = _create_point(w_cm, h_cm, 0.0)
+    p_out1 = _create_point(ox, oy, 0.0)
+    p_out2 = _create_point(ox + w_cm, oy + h_cm, 0.0)
     sketch_bezel.sketchCurves.sketchLines.addTwoPointRectangle(p_out1, p_out2)
 
-    p_in1 = _create_point(bezel_cm, bezel_cm, 0.0)
-    p_in2 = _create_point(w_cm - bezel_cm, h_cm - bezel_cm, 0.0)
+    p_in1 = _create_point(ox + bezel_cm, oy + bezel_cm, 0.0)
+    p_in2 = _create_point(ox + w_cm - bezel_cm, oy + h_cm - bezel_cm, 0.0)
     sketch_bezel.sketchCurves.sketchLines.addTwoPointRectangle(p_in1, p_in2)
 
-    prof_bezel = _get_first_profile(sketch_bezel)
-    op_new = adsk.fusion.FeatureOperations.NewBodyFeatureOperation if FUSION_AVAILABLE else 0
-    _extrude_profile(comp, prof_bezel, _create_value_real(t_cm), op_new)
+    bezel_profs = _get_all_profiles(sketch_bezel)
+    if bezel_profs:
+        _extrude_simple(comp, bezel_profs[0], _create_value_real(t_cm), op_new)
+        _name_last_body(comp, "DIV_Crosshatch_12x11")
 
-    # 2. 45-degree Diamond Lattice Segments
+    # 2. 45-degree Diamond Lattice Struts
     inner_w_mm = params.panel_width_mm - 20.0
     inner_h_mm = params.panel_height_mm - 20.0
     segments = calculate_diamond_lattice_segments(
@@ -534,48 +547,70 @@ def build_divider_panel_component(root_comp: Any, params: FrunkParameters):
         strut_w=params.lattice_strut_mm
     )
 
+    w_strut_cm = (params.lattice_strut_mm / 10.0) / (2.0 * math.sqrt(2))
     sketch_lattice = sketches.add(plane_xy)
-    for (x1, y1), (x2, y2) in segments:
-        pt1 = _create_point(bezel_cm + x1 / 10.0, bezel_cm + y1 / 10.0, 0.0)
-        pt2 = _create_point(bezel_cm + x2 / 10.0, bezel_cm + y2 / 10.0, 0.0)
-        sketch_lattice.sketchCurves.sketchLines.addByTwoPoints(pt1, pt2)
 
-    # 3. Top Handle
+    # Draw solid strip polygon for each diagonal segment
+    for (x1, y1), (x2, y2) in segments:
+        ax, ay = ox + bezel_cm + x1 / 10.0, oy + bezel_cm + y1 / 10.0
+        bx, by = ox + bezel_cm + x2 / 10.0, oy + bezel_cm + y2 / 10.0
+
+        # Offset corners for strut thickness
+        p_a1 = _create_point(ax - w_strut_cm, ay + w_strut_cm, 0.0)
+        p_a2 = _create_point(ax + w_strut_cm, ay - w_strut_cm, 0.0)
+        p_b1 = _create_point(bx - w_strut_cm, by + w_strut_cm, 0.0)
+        p_b2 = _create_point(bx + w_strut_cm, by - w_strut_cm, 0.0)
+
+        lines = sketch_lattice.sketchCurves.sketchLines
+        lines.addByTwoPoints(p_a1, p_b1)
+        lines.addByTwoPoints(p_b1, p_b2)
+        lines.addByTwoPoints(p_b2, p_a2)
+        lines.addByTwoPoints(p_a2, p_a1)
+
+    lattice_profs = _get_all_profiles(sketch_lattice)
+    for prof in lattice_profs:
+        _extrude_simple(comp, prof, _create_value_real(t_cm), op_join)
+
+    # 3. Top Handle Sketch
     sketch_handle = sketches.add(plane_xy)
     handle_w_cm = 8.0
     handle_h_cm = 2.2
-    mid_x = w_cm / 2.0
-    hp1 = _create_point(mid_x - handle_w_cm / 2.0, h_cm - bezel_cm - handle_h_cm, 0.0)
-    hp2 = _create_point(mid_x + handle_w_cm / 2.0, h_cm - bezel_cm, 0.0)
+    mid_x = ox + w_cm / 2.0
+    hp1 = _create_point(mid_x - handle_w_cm / 2.0, oy + h_cm - bezel_cm - handle_h_cm, 0.0)
+    hp2 = _create_point(mid_x + handle_w_cm / 2.0, oy + h_cm - bezel_cm, 0.0)
     sketch_handle.sketchCurves.sketchLines.addTwoPointRectangle(hp1, hp2)
 
-    return comp
 
-
-def build_locking_pin_component(root_comp: Any, params: FrunkParameters):
-    comp = _create_or_get_component(root_comp, "Pin_Lock_M5")
+def build_locking_pin_component(comp: Any, params: FrunkParameters, offset_x: float = 350.0, offset_y: float = 180.0):
+    """
+    Builds the Transverse Locking Pin (`Pin_Lock_M5`).
+    """
     sketches = comp.sketches
     plane_xy = comp.xYConstructionPlane if hasattr(comp, "xYConstructionPlane") else None
 
-    # 1. Grip head cylinder (8mm diameter x 4mm height)
-    sketch_head = sketches.add(plane_xy)
-    head_center = _create_point(0.0, 0.0, 0.0)
-    sketch_head.sketchCurves.sketchCircles.addByCenterRadius(head_center, 0.4)
+    ox = offset_x / 10.0
+    oy = offset_y / 10.0
 
-    prof_head = _get_first_profile(sketch_head)
     op_new = adsk.fusion.FeatureOperations.NewBodyFeatureOperation if FUSION_AVAILABLE else 0
     op_join = adsk.fusion.FeatureOperations.JoinFeatureOperation if FUSION_AVAILABLE else 1
-    _extrude_profile(comp, prof_head, _create_value_real(0.4), op_new)
 
-    # 2. Pin shaft cylinder (5mm diameter x 28mm length extending in -Z)
+    # 1. Grip head cylinder (8mm diameter x 4mm height)
+    sketch_head = sketches.add(plane_xy)
+    head_center = _create_point(ox, oy, 0.0)
+    sketch_head.sketchCurves.sketchCircles.addByCenterRadius(head_center, 0.4)
+
+    head_profs = _get_all_profiles(sketch_head)
+    if head_profs:
+        _extrude_simple(comp, head_profs[0], _create_value_real(0.4), op_new)
+        _name_last_body(comp, "Pin_Lock_M5")
+
+    # 2. Pin shaft cylinder (5mm diameter x 28mm length)
     sketch_shaft = sketches.add(plane_xy)
-    shaft_center = _create_point(0.0, 0.0, 0.0)
-    sketch_shaft.sketchCurves.sketchCircles.addByCenterRadius(shaft_center, params.pin_diameter_cm / 2.0)
+    sketch_shaft.sketchCurves.sketchCircles.addByCenterRadius(head_center, params.pin_diameter_cm / 2.0)
 
-    prof_shaft = _get_first_profile(sketch_shaft)
-    _extrude_profile(comp, prof_shaft, _create_value_real(-2.8), op_join)
-
-    return comp
+    shaft_profs = _get_all_profiles(sketch_shaft)
+    if shaft_profs:
+        _extrude_simple(comp, shaft_profs[0], _create_value_real(-2.8), op_join)
 
 
 # ==============================================================================
@@ -599,7 +634,7 @@ def run(context=None):
                     )
                 return
 
-            # Ensure document is in Parametric Assembly Mode (Capture Design History)
+            # Ensure document is in Parametric Mode
             try:
                 if design.designType != adsk.fusion.DesignTypes.ParametricDesignType:
                     design.designType = adsk.fusion.DesignTypes.ParametricDesignType
@@ -608,33 +643,39 @@ def run(context=None):
 
             root_comp = design.rootComponent
         else:
+            class MockRoot:
+                def __init__(self):
+                    self.sketches = MockSketches()
+                    self.features = MockFeatures()
+            root_comp = MockRoot()
             design = MockDesign()
-            root_comp = design.rootComponent
 
         params = FrunkParameters()
 
         # Step 1: Create Parametric User Parameters (fx)
         create_user_parameters(design, params)
 
-        # Step 2: Build All 6 Core CAD Components
-        comp_truss = build_floor_truss_component(root_comp, params)
-        comp_rib = build_vertical_rib_component(root_comp, params)
-        comp_rail = build_horizontal_rail_component(root_comp, params)
-        comp_junctions = build_junction_components(root_comp, params)
-        comp_divider = build_divider_panel_component(root_comp, params)
-        comp_pin = build_locking_pin_component(root_comp, params)
+        # Step 2: Build All 8 Core CAD Solid Bodies (Neatly arranged side-by-side)
+        build_floor_truss_component(root_comp, params, offset_x=0.0, offset_y=0.0)
+        build_vertical_rib_component(root_comp, params, offset_x=0.0, offset_y=60.0)
+        build_horizontal_rail_component(root_comp, params, offset_x=0.0, offset_y=120.0)
+        build_junction_components(root_comp, params, offset_x=350.0, offset_y=0.0)
+        build_divider_panel_component(root_comp, params, offset_x=0.0, offset_y=-320.0)
+        build_locking_pin_component(root_comp, params, offset_x=350.0, offset_y=180.0)
 
         if ui:
             ui.messageBox(
                 "Tesla Model X Frunk Modular Divider System Generated Successfully!\n\n"
-                "Components created in Browser Tree:\n"
-                " 1. FT_Segment_12in (Floor Truss with web cutouts & dovetails)\n"
-                " 2. VR_Post_Deep (11\" Vertical Rib Post with 6.4mm slots)\n"
-                " 3. HR_Rail_12in (Horizontal Top Tie Rail)\n"
-                " 4. J_Corner_90, J_Tee_3Way, J_Cross_4Way (Modular Junction Blocks)\n"
-                " 5. DIV_Crosshatch_12x11 (45° Diamond Lattice Slide-In Divider)\n"
-                " 6. Pin_Lock_M5 (Transverse Locking Pin)\n\n"
-                "You can inspect all components in your browser tree on the left and edit dimensions in Modify -> Change Parameters (fx).",
+                "All 8 modular bodies have been generated and laid out side-by-side in your workspace:\n\n"
+                "  1. FT_Segment_12in (Floor Truss with web cutouts & dovetails)\n"
+                "  2. VR_Post_Deep (11\" Vertical Rib with 6.4mm slots)\n"
+                "  3. HR_Rail_12in (Horizontal Top Tie Rail)\n"
+                "  4. J_Corner_90 (2-Way 90° Corner Junction)\n"
+                "  5. J_Tee_3Way (3-Way T-Junction)\n"
+                "  6. J_Cross_4Way (4-Way Cross Junction)\n"
+                "  7. DIV_Crosshatch_12x11 (Solid 45° Diamond Lattice Divider)\n"
+                "  8. Pin_Lock_M5 (Transverse Locking Pin)\n\n"
+                "Check the 'Bodies' folder in your Browser Tree on the left to view, isolate, or export any component!",
                 "Generation Complete"
             )
 
