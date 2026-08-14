@@ -713,12 +713,16 @@ def run(context: Optional[Any] = None) -> None:
     """
     ui = None
     try:
-        if FUSION_AVAILABLE and context is not None:
+        if FUSION_AVAILABLE:
             app = adsk.core.Application.get()
             ui = app.userInterface
-            design = app.activeProduct
+            design = adsk.fusion.Design.cast(app.activeProduct)
             if not design:
-                ui.messageBox("No active Fusion 360 design document found.\nPlease open or create a design.", "Tesla Model X Frunk CAD Generator")
+                if ui:
+                    ui.messageBox(
+                        "No active 3D design workspace found.\nPlease create or open a document in Fusion 360 (File -> New Design) before running.",
+                        "Tesla Model X Frunk CAD Generator"
+                    )
                 return
             root_comp = design.rootComponent
             mode_desc = "Autodesk Fusion 360 Active Session"
