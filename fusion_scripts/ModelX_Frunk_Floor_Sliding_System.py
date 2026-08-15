@@ -5,11 +5,11 @@ Autodesk Fusion 360 - Standalone Universal Part & Assembly Script
 Works seamlessly in Part Design mode, Assembly mode, and fresh documents.
 
 GENERATES:
-  1. TRK_Front_L       - Front-Left Flanged Rail Quadrant (< 310 mm bed fit)
-  2. TRK_Front_R       - Front-Right Flanged Rail Quadrant (< 310 mm bed fit)
-  3. TRK_Rear_L        - Rear-Left Flanged Rail Quadrant (< 310 mm bed fit)
-  4. TRK_Rear_R        - Rear-Right Flanged Rail Quadrant (< 310 mm bed fit)
-  5. PST_Slide_Upright - Sliding Post with captive base shoe and vertical guide channel
+  1. TRK_Front_L       - Front-Left Flanged Two-Tier Rail Quadrant (< 310 mm bed fit)
+  2. TRK_Front_R       - Front-Right Flanged Two-Tier Rail Quadrant (< 310 mm bed fit)
+  3. TRK_Rear_L        - Rear-Left Flanged Two-Tier Rail Quadrant (< 310 mm bed fit)
+  4. TRK_Rear_R        - Rear-Right Flanged Two-Tier Rail Quadrant (< 310 mm bed fit)
+  5. PST_Slide_Upright - Sliding Post with wrap-around captive base shoe & guide slot
   6. SLAT_Segment_6in  - 6-inch modular interlocking cross-member divider slat
 """
 
@@ -46,9 +46,6 @@ class SystemParameters:
     slat_length_mm: float = 152.4        # 6.0 in modular slat segment length
     slat_height_mm: float = 60.0         # Slat layer height
     slat_thickness_mm: float = 5.0       # Slat thickness
-    dovetail_w_mm: float = 14.0          # 15 deg seam dovetail root width
-    dovetail_d_mm: float = 8.0           # Seam dovetail depth
-    dovetail_ang_deg: float = 15.0       # 15 deg dovetail half-angle
     tol_slip_mm: float = 0.20            # 3D printing slip clearance
 
 
@@ -60,54 +57,64 @@ def _create_pt(x_cm: float, y_cm: float, z_cm: float = 0.0):
     return MockPt(x_cm, y_cm, z_cm)
 
 
-def calculate_dovetail_tab(
-    base_center: Tuple[float, float],
-    normal: Tuple[float, float],
-    base_w: float = 14.0,
-    depth: float = 8.0,
-    angle_deg: float = 15.0,
+def make_tab_points(
+    p_start: Tuple[float, float],
+    p_end: Tuple[float, float],
+    ext_vec: Tuple[float, float],
+    tab_w: float = 12.0,
+    tab_d: float = 7.0,
+    flare_ang: float = 14.0,
     tol: float = 0.20
 ) -> List[Tuple[float, float]]:
-    nx, ny = normal
-    tx, ty = -ny, nx
+    ex, ey = ext_vec
+    dx = p_end[0] - p_start[0]
+    dy = p_end[1] - p_start[1]
+    edge_len = math.hypot(dx, dy)
+    tx, ty = dx / edge_len, dy / edge_len
 
-    rad = math.radians(angle_deg)
-    flare = depth * math.tan(rad)
-    w_root = (base_w - 2.0 * tol) / 2.0
-    w_tip = (base_w + 2.0 * flare - 2.0 * tol) / 2.0
+    mid_x = (p_start[0] + p_end[0]) / 2.0
+    mid_y = (p_start[1] + p_end[1]) / 2.0
 
-    bx, by = base_center
-    p0 = (bx - tx * w_root, by - ty * w_root)
-    p1 = (bx + nx * depth - tx * w_tip, by + ny * depth - ty * w_tip)
-    p2 = (bx + nx * depth + tx * w_tip, by + ny * depth + ty * w_tip)
-    p3 = (bx + tx * w_root, by + ty * w_root)
+    flare = tab_d * math.tan(math.radians(flare_ang))
+    w_root = (tab_w - 2.0 * tol) / 2.0
+    w_tip = (tab_w + 2.0 * flare - 2.0 * tol) / 2.0
 
-    return [p0, p1, p2, p3]
+    p0 = (mid_x - tx * w_root, mid_y - ty * w_root)
+    p1 = (mid_x - tx * w_tip + ex * tab_d, mid_y - ty * w_tip + ey * tab_d)
+    p2 = (mid_x + tx * w_tip + ex * tab_d, mid_y + ty * w_tip + ey * tab_d)
+    p3 = (mid_x + tx * w_root, mid_y + ty * w_root)
+
+    return [p_start, p0, p1, p2, p3, p_end]
 
 
-def calculate_dovetail_pocket(
-    base_center: Tuple[float, float],
-    normal: Tuple[float, float],
-    base_w: float = 14.0,
-    depth: float = 8.0,
-    angle_deg: float = 15.0,
+def make_pocket_points(
+    p_start: Tuple[float, float],
+    p_end: Tuple[float, float],
+    int_vec: Tuple[float, float],
+    pocket_w: float = 12.0,
+    pocket_d: float = 7.0,
+    flare_ang: float = 14.0,
     tol: float = 0.20
 ) -> List[Tuple[float, float]]:
-    nx, ny = normal
-    tx, ty = -ny, nx
+    ix, iy = int_vec
+    dx = p_end[0] - p_start[0]
+    dy = p_end[1] - p_start[1]
+    edge_len = math.hypot(dx, dy)
+    tx, ty = dx / edge_len, dy / edge_len
 
-    rad = math.radians(angle_deg)
-    flare = depth * math.tan(rad)
-    w_root = (base_w + 2.0 * tol) / 2.0
-    w_tip = (base_w + 2.0 * flare + 2.0 * tol) / 2.0
+    mid_x = (p_start[0] + p_end[0]) / 2.0
+    mid_y = (p_start[1] + p_end[1]) / 2.0
 
-    bx, by = base_center
-    p0 = (bx - tx * w_root, by - ty * w_root)
-    p1 = (bx - nx * depth - tx * w_tip, by - ny * depth - ty * w_tip)
-    p2 = (bx - nx * depth + tx * w_tip, by - ny * depth + ty * w_tip)
-    p3 = (bx + tx * w_root, by + ty * w_root)
+    flare = pocket_d * math.tan(math.radians(flare_ang))
+    w_root = (pocket_w + 2.0 * tol) / 2.0
+    w_tip = (pocket_w + 2.0 * flare + 2.0 * tol) / 2.0
 
-    return [p0, p1, p2, p3]
+    p0 = (mid_x - tx * w_root, mid_y - ty * w_root)
+    p1 = (mid_x - tx * w_tip + ix * pocket_d, mid_y - ty * w_tip + iy * pocket_d)
+    p2 = (mid_x + tx * w_tip + ix * pocket_d, mid_y + ty * w_tip + iy * pocket_d)
+    p3 = (mid_x + tx * w_root, mid_y + ty * w_root)
+
+    return [p_start, p0, p1, p2, p3, p_end]
 
 
 def generate_watertight_quadrants(
@@ -115,9 +122,6 @@ def generate_watertight_quadrants(
     half_d: float,
     track_w: float,
     cr_out: float = 55.0,
-    dt_w: float = 14.0,
-    dt_d: float = 8.0,
-    dt_a: float = 15.0,
     tol: float = 0.20,
     num_arc: int = 12
 ) -> Dict[str, List[Tuple[float, float]]]:
@@ -125,96 +129,90 @@ def generate_watertight_quadrants(
     cx_l, cx_r = -half_w + cr_out, half_w - cr_out
     cy_f, cy_r = half_d - cr_out, -half_d + cr_out
 
-    front_seam = (0.0, half_d - track_w / 2.0)
-    rear_seam = (0.0, -half_d + track_w / 2.0)
-    left_seam = (-half_w + track_w / 2.0, 0.0)
-    right_seam = (half_w - track_w / 2.0, 0.0)
+    dt_w = 12.0 if track_w >= 25.0 else 6.5
+    dt_d = 7.0 if track_w >= 25.0 else 4.5
+    dt_a = 14.0
 
     quads: Dict[str, List[Tuple[float, float]]] = {}
 
-    # 1. TRK_Front_L: (X <= 0, Y >= 0)
+    # 1. TRK_Front_L: (X in [-half_w, 0], Y in [half_d - track_w, half_d])
     fl: List[Tuple[float, float]] = []
     fl.append((0.0, half_d))
     fl.append((cx_l, half_d))
     for i in range(1, num_arc + 1):
-        ang = math.pi / 2.0 + (i / num_arc) * (math.pi / 2.0)
-        fl.append((cx_l + cr_out * math.cos(ang), cy_f + cr_out * math.sin(ang)))
+        a = math.pi / 2.0 + (i / num_arc) * (math.pi / 2.0)
+        fl.append((cx_l + cr_out * math.cos(a), cy_f + cr_out * math.sin(a)))
     fl.append((-half_w, 0.0))
-    tab_l = calculate_dovetail_tab(left_seam, (0.0, -1.0), base_w=dt_w, depth=dt_d, angle_deg=dt_a, tol=tol)
-    fl.extend(tab_l)
-    fl.append((-half_w + track_w, 0.0))
+    tab_l = make_tab_points((-half_w, 0.0), (-half_w + track_w, 0.0), (0.0, -1.0), tab_w=dt_w, tab_d=dt_d, flare_ang=dt_a, tol=tol)
+    fl.extend(tab_l[1:])
     fl.append((-half_w + track_w, cy_f))
     for i in range(1, num_arc + 1):
-        ang = math.pi - (i / num_arc) * (math.pi / 2.0)
-        fl.append((cx_l + cr_in * math.cos(ang), cy_f + cr_in * math.sin(ang)))
+        a = math.pi - (i / num_arc) * (math.pi / 2.0)
+        fl.append((cx_l + cr_in * math.cos(a), cy_f + cr_in * math.sin(a)))
     fl.append((0.0, half_d - track_w))
-    pock_f = calculate_dovetail_pocket(front_seam, (-1.0, 0.0), base_w=dt_w, depth=dt_d, angle_deg=dt_a, tol=tol)
-    fl.extend(pock_f)
+    pock_f = make_pocket_points((0.0, half_d - track_w), (0.0, half_d), (-1.0, 0.0), pocket_w=dt_w, pocket_d=dt_d, flare_ang=dt_a, tol=tol)
+    fl.extend(pock_f[1:])
     quads["TRK_Front_L"] = fl
 
-    # 2. TRK_Front_R: (X >= 0, Y >= 0)
+    # 2. TRK_Front_R: (X in [0, half_w], Y in [half_d - track_w, half_d])
     fr: List[Tuple[float, float]] = []
     fr.append((0.0, half_d))
-    tab_f = calculate_dovetail_tab(front_seam, (-1.0, 0.0), base_w=dt_w, depth=dt_d, angle_deg=dt_a, tol=tol)
-    fr.extend(tab_f)
-    fr.append((0.0, half_d - track_w))
+    tab_f = make_tab_points((0.0, half_d), (0.0, half_d - track_w), (-1.0, 0.0), tab_w=dt_w, tab_d=dt_d, flare_ang=dt_a, tol=tol)
+    fr.extend(tab_f[1:])
     fr.append((cx_r, half_d - track_w))
     for i in range(1, num_arc + 1):
-        ang = math.pi / 2.0 - (i / num_arc) * (math.pi / 2.0)
-        fr.append((cx_r + cr_in * math.cos(ang), cy_f + cr_in * math.sin(ang)))
+        a = math.pi / 2.0 - (i / num_arc) * (math.pi / 2.0)
+        fr.append((cx_r + cr_in * math.cos(a), cy_f + cr_in * math.sin(a)))
     fr.append((half_w - track_w, 0.0))
-    pock_r = calculate_dovetail_pocket(right_seam, (0.0, -1.0), base_w=dt_w, depth=dt_d, angle_deg=dt_a, tol=tol)
-    fr.extend(pock_r)
-    fr.append((half_w, 0.0))
+    pock_r = make_pocket_points((half_w - track_w, 0.0), (half_w, 0.0), (0.0, 1.0), pocket_w=dt_w, pocket_d=dt_d, flare_ang=dt_a, tol=tol)
+    fr.extend(pock_r[1:])
     fr.append((half_w, cy_f))
     for i in range(1, num_arc + 1):
-        ang = (i / num_arc) * (math.pi / 2.0)
-        fr.append((cx_r + cr_out * math.cos(ang), cy_f + cr_out * math.sin(ang)))
+        a = (i / num_arc) * (math.pi / 2.0)
+        fr.append((cx_r + cr_out * math.cos(a), cy_f + cr_out * math.sin(a)))
     fr.append((cx_r, half_d))
+    fr.append((0.0, half_d))
     quads["TRK_Front_R"] = fr
 
-    # 3. TRK_Rear_L: (X <= 0, Y <= 0)
+    # 3. TRK_Rear_L: (X in [-half_w, 0], Y in [-half_d, -half_d + track_w])
     rl: List[Tuple[float, float]] = []
     rl.append((-half_w, 0.0))
-    pock_l = calculate_dovetail_pocket(left_seam, (0.0, -1.0), base_w=dt_w, depth=dt_d, angle_deg=dt_a, tol=tol)
-    rl.extend(pock_l)
-    rl.append((-half_w + track_w, 0.0))
+    pock_l = make_pocket_points((-half_w, 0.0), (-half_w + track_w, 0.0), (0.0, -1.0), pocket_w=dt_w, pocket_d=dt_d, flare_ang=dt_a, tol=tol)
+    rl.extend(pock_l[1:])
     rl.append((-half_w + track_w, cy_r))
     for i in range(1, num_arc + 1):
-        ang = -math.pi + (i / num_arc) * (math.pi / 2.0)
-        rl.append((cx_l + cr_in * math.cos(ang), cy_r + cr_in * math.sin(ang)))
+        a = -math.pi + (i / num_arc) * (math.pi / 2.0)
+        rl.append((cx_l + cr_in * math.cos(ang := a), cy_r + cr_in * math.sin(ang)))
     rl.append((0.0, -half_d + track_w))
-    tab_rear = calculate_dovetail_tab(rear_seam, (1.0, 0.0), base_w=dt_w, depth=dt_d, angle_deg=dt_a, tol=tol)
-    rl.extend(tab_rear)
-    rl.append((0.0, -half_d))
+    tab_rear = make_tab_points((0.0, -half_d + track_w), (0.0, -half_d), (1.0, 0.0), tab_w=dt_w, tab_d=dt_d, flare_ang=dt_a, tol=tol)
+    rl.extend(tab_rear[1:])
     rl.append((cx_l, -half_d))
     for i in range(1, num_arc + 1):
-        ang = -math.pi / 2.0 - (i / num_arc) * (math.pi / 2.0)
-        rl.append((cx_l + cr_out * math.cos(ang), cy_r + cr_out * math.sin(ang)))
+        a = -math.pi / 2.0 - (i / num_arc) * (math.pi / 2.0)
+        rl.append((cx_l + cr_out * math.cos(a), cy_r + cr_out * math.sin(a)))
+    rl.append((-half_w, 0.0))
     quads["TRK_Rear_L"] = rl
 
-    # 4. TRK_Rear_R: (X >= 0, Y <= 0)
+    # 4. TRK_Rear_R: (X in [0, half_w], Y in [-half_d, -half_d + track_w])
     rr: List[Tuple[float, float]] = []
     rr.append((0.0, -half_d))
-    pock_rear = calculate_dovetail_pocket(rear_seam, (1.0, 0.0), base_w=dt_w, depth=dt_d, angle_deg=dt_a, tol=tol)
-    rr.extend(pock_rear)
-    rr.append((0.0, -half_d + track_w))
+    pock_rear = make_pocket_points((0.0, -half_d), (0.0, -half_d + track_w), (1.0, 0.0), pocket_w=dt_w, pocket_d=dt_d, flare_ang=dt_a, tol=tol)
+    rr.extend(pock_rear[1:])
     rr.append((cx_r, -half_d + track_w))
     for i in range(1, num_arc + 1):
-        ang = -math.pi / 2.0 + (i / num_arc) * (math.pi / 2.0)
-        rr.append((cx_r + cr_in * math.cos(ang), cy_r + cr_in * math.sin(ang)))
+        a = -math.pi / 2.0 + (i / num_arc) * (math.pi / 2.0)
+        rr.append((cx_r + cr_in * math.cos(a), cy_r + cr_in * math.sin(a)))
     rr.append((half_w - track_w, 0.0))
-    tab_r = calculate_dovetail_tab(right_seam, (0.0, -1.0), base_w=dt_w, depth=dt_d, angle_deg=dt_a, tol=tol)
-    rr.extend(tab_r)
-    rr.append((half_w, 0.0))
+    tab_r = make_tab_points((half_w - track_w, 0.0), (half_w, 0.0), (0.0, 1.0), tab_w=dt_w, tab_d=dt_d, flare_ang=dt_a, tol=tol)
+    rr.extend(tab_r[1:])
     rr.append((half_w, cy_r))
     for i in range(1, num_arc + 1):
-        ang = 0.0 - (i / num_arc) * (math.pi / 2.0)
-        rr.append((cx_r + cr_out * math.cos(ang), cy_r + cr_out * math.sin(ang)))
+        a = 0.0 - (i / num_arc) * (math.pi / 2.0)
+        rr.append((cx_r + cr_out * math.cos(a), cy_r + cr_out * math.sin(a)))
     rr.append((cx_r, -half_d))
+    rr.append((0.0, -half_d))
     quads["TRK_Rear_R"] = rr
 
-    # Clean redundant consecutive points
     cleaned_dict: Dict[str, List[Tuple[float, float]]] = {}
     for name, raw_pts in quads.items():
         cleaned = []
@@ -232,8 +230,6 @@ def build_system(root_comp: Any, params: SystemParameters):
     sketches = root_comp.sketches
     plane_xy = root_comp.xYConstructionPlane if hasattr(root_comp, "xYConstructionPlane") else None
     op_new = adsk.fusion.FeatureOperations.NewBodyFeatureOperation if FUSION_AVAILABLE else 0
-    op_join = adsk.fusion.FeatureOperations.JoinFeatureOperation if FUSION_AVAILABLE else 1
-    op_cut = adsk.fusion.FeatureOperations.CutFeatureOperation if FUSION_AVAILABLE else 2
 
     half_w = (params.width_mm / 2.0) - params.wall_clearance_mm
     half_d = (params.depth_mm / 2.0) - params.wall_clearance_mm
@@ -245,12 +241,12 @@ def build_system(root_comp: Any, params: SystemParameters):
     h_neck_cm = params.rail_neck_height_mm / 10.0
     h_tot_cm = h_base_cm + h_neck_cm
 
-    # 1. Build 4 Interlocking Track Quadrants as Distinct Solid BRep Bodies
+    # 1. Build 4 Interlocking Two-Tier Track Quadrants as Distinct Solid BRep Bodies
     for name in ["TRK_Front_L", "TRK_Front_R", "TRK_Rear_L", "TRK_Rear_R"]:
         poly_base = quads_base[name]
         poly_neck = quads_neck[name]
 
-        # Step 1: Base flange extrusion as New Body
+        # Step 1: Base flange extrusion as New Body (0 to h_base_cm)
         sketch_b = sketches.add(plane_xy)
         pts_b = [_create_pt(p[0] / 10.0, p[1] / 10.0, 0.0) for p in poly_base]
         for i in range(len(pts_b)):
@@ -261,7 +257,7 @@ def build_system(root_comp: Any, params: SystemParameters):
             ext_b = root_comp.features.extrudeFeatures.addSimple(sketch_b.profiles.item(0), adsk.core.ValueInput.createByReal(h_base_cm), op_new)
             body_base = ext_b.bodies.item(0) if ext_b.bodies.count > 0 else None
 
-        # Step 2: Upper neck extrusion as New Body
+        # Step 2: Upper neck extrusion as New Body (0 to h_tot_cm)
         sketch_n = sketches.add(plane_xy)
         pts_n = [_create_pt(p[0] / 10.0, p[1] / 10.0, 0.0) for p in poly_neck]
         for i in range(len(pts_n)):
@@ -272,7 +268,7 @@ def build_system(root_comp: Any, params: SystemParameters):
             ext_n = root_comp.features.extrudeFeatures.addSimple(sketch_n.profiles.item(0), adsk.core.ValueInput.createByReal(h_tot_cm), op_new)
             body_neck = ext_n.bodies.item(0) if ext_n.bodies.count > 0 else None
 
-        # Step 3: Combine base and neck for THIS quadrant only
+        # Step 3: Combine base and neck for THIS quadrant into one solid body
         if FUSION_AVAILABLE and body_base and body_neck:
             tools = adsk.core.ObjectCollection.create()
             tools.add(body_neck)
@@ -466,11 +462,11 @@ def run(context=None):
         if ui:
             ui.messageBox(
                 "Tesla Model X Frunk Modular System Generated Successfully!\n\n"
-                "Solid Bodies Created:\n"
-                "  1. TRK_Front_L (Stepped T-Rail, Front-Left with 15° Dovetail)\n"
-                "  2. TRK_Front_R (Stepped T-Rail, Front-Right with 15° Dovetail)\n"
-                "  3. TRK_Rear_L (Stepped T-Rail, Rear-Left with 15° Dovetail)\n"
-                "  4. TRK_Rear_R (Stepped T-Rail, Rear-Right with 15° Dovetail)\n"
+                "All 4 quadrants now feature the complete Two-Tier Stepped T-Rail:\n"
+                "  1. TRK_Front_L (Two-Tier T-Rail with 15° Dovetails)\n"
+                "  2. TRK_Front_R (Two-Tier T-Rail with 15° Dovetails)\n"
+                "  3. TRK_Rear_L (Two-Tier T-Rail with 15° Dovetails)\n"
+                "  4. TRK_Rear_R (Two-Tier T-Rail with 15° Dovetails)\n"
                 "  5. PST_Slide_Upright (Sliding Post with wrap-around captive base shoe & guide slot)\n"
                 "  6. SLAT_Segment_6in (6-inch modular interlocking cross slat)\n\n"
                 "Check the 'Bodies' folder in your Browser Tree!",
