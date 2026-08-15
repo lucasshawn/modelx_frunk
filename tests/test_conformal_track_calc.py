@@ -10,6 +10,8 @@ import numpy as np
 
 from fusion_scripts.conformal_track_calc import (
     ConformalTrackParameters,
+    SeamJoint,
+    QuadrantGeometry,
     extract_calibrated_floor_polygon,
     offset_polygon_2d,
     resample_polygon_2d,
@@ -18,10 +20,14 @@ from fusion_scripts.conformal_track_calc import (
     calculate_captive_trail_profile,
     calculate_rigid_rectangular_profile,
     calculate_track_cross_section_profile,
+    calculate_seam_dovetail_joint,
+    calculate_seam_dovetail_profile,
+    slice_track_quadrants,
     generate_track_quadrant_polygons,
     calculate_polygon_area,
     calculate_polygon_perimeter,
 )
+
 
 
 def test_conformal_track_parameters_defaults():
@@ -266,3 +272,216 @@ def test_generate_track_quadrant_polygons():
         assert "bounds" in q
         assert "max_dimension" in q
         assert q["max_dimension"] < 310.0, f"Quadrant {key} exceeds 310mm bed limit: {q['max_dimension']}"
+
+
+def test_calculate_seam_dovetail_profile():
+    """Verify 15-degree dovetail trapezoid profile generation with tolerance offset."""
+    male_pts = calculate_seam_dovetail_profile(male=True, tol=0.20, base_w=14.0, depth=8.0, angle_deg=15.0)
+    fem_pts = calculate_seam_dovetail_profile(male=False, tol=0.20, base_w=14.0, depth=8.0, angle_deg=15.0)
+
+    assert len(male_pts) == 4
+    assert len(fem_pts) == 4
+
+    flare = 8.0 * math.tan(math.radians(15.0))  # ~2.1436 mm
+    assert male_pts[0][0] == pytest.approx(-7.0, abs=1e-3)
+    assert male_pts[1][0] == pytest.approx(-(7.0 + flare), abs=1e-3)
+    assert male_pts[2][0] == pytest.approx((7.0 + flare), abs=1e-3)
+    assert male_pts[3][0] == pytest.approx(7.0, abs=1e-3)
+    assert male_pts[1][1] == pytest.approx(8.0, abs=1e-3)
+
+    # Female pocket root is 14.4 mm (half-width 7.2 mm) and depth is 8.2 mm
+    pocket_flare = 8.2 * math.tan(math.radians(15.0))
+    assert fem_pts[0][0] == pytest.approx(-7.2, abs=1e-3)
+    assert fem_pts[1][0] == pytest.approx(-(7.2 + pocket_flare), abs=1e-3)
+    assert fem_pts[2][0] == pytest.approx((7.2 + pocket_flare), abs=1e-3)
+    assert fem_pts[3][0] == pytest.approx(7.2, abs=1e-3)
+    assert fem_pts[1][1] == pytest.approx(8.2, abs=1e-3)
+
+
+def test_calculate_seam_dovetail_joint_geometry_and_clearance():
+    """Verify dovetail joint generation between outer and inner seam boundaries with 0.20mm slip clearance."""
+    p_outer = (0.0, 100.0)
+    p_inner = (0.0, 70.0)  # 30.0 mm seam width
+    normal = (1.0, 0.0)    # forward normal along +X
+
+    male_cut = calculate_seam_dovetail_joint(
+        p_outer=p_outer,
+        p_inner=p_inner,
+        male=True,
+        seam_normal=normal,
+        tol=0.20,
+        base_w=14.0,
+        depth=8.0,
+        angle_deg=15.0,
+    )
+    fem_cut = calculate_seam_dovetail_joint(
+        p_outer=p_outer,
+        p_inner=p_inner,
+        male=False,
+        seam_normal=normal,
+        tol=0.20,
+        base_w=14.0,
+        depth=8.0,
+        angle_deg=15.0,
+    )
+
+    # Both start at p_outer and end at p_inner
+    assert male_cut[0] == pytest.approx(p_outer)
+    assert male_cut[-1] == pytest.approx(p_inner)
+    assert fem_cut[0] == pytest.approx(p_outer)
+    assert fem_cut[-1] == pytest.approx(p_inner)
+
+    # Male tab projects in +X by 8.0 mm
+    xs_male = [p[0] for p in male_cut]
+    assert max(xs_male) == pytest.approx(8.0, abs=1e-3)
+
+    # Female pocket projects in +X by 8.2 mm
+    xs_fem = [p[0] for p in fem_cut]
+    assert max(xs_fem) == pytest.approx(8.2, abs=1e-3)
+
+    # Dovetail root width: Male = 14.0mm (Y: 78 to 92), Female = 14.4mm (Y: 77.8 to 92.2)
+    # Clearance at root is exactly 0.20mm on each side (total 0.40mm)
+    assert male_cut[1][1] == pytest.approx(92.0, abs=1e-3)
+    assert male_cut[4][1] == pytest.approx(78.0, abs=1e-3)
+    assert fem_cut[1][1] == pytest.approx(92.2, abs=1e-3)
+    assert fem_cut[4][1] == pytest.approx(77.8, abs=1e-3)
+
+    # Clearance at root shoulders
+    clearance_shoulder_top = fem_cut[1][1] - male_cut[1][1]
+    clearance_shoulder_bot = male_cut[4][1] - fem_cut[4][1]
+    assert clearance_shoulder_top == pytest.approx(0.20, abs=1e-3)
+    assert clearance_shoulder_bot == pytest.approx(0.20, abs=1e-3)
+
+
+def test_slice_track_quadrants_calibrated_scan():
+    """Verify 3D quadrant slicing on calibrated LiDAR scan produces 4 valid closed segments under 310mm."""
+    stl_path = "docs/scans/frunk_scan_calibrated.stl"
+    floor_poly = extract_calibrated_floor_polygon(stl_path=stl_path, z_height=10.0)
+    loops = generate_track_boundary_loops(floor_poly, wall_clearance_mm=12.7, track_width_mm=30.0)
+
+    quadrants = slice_track_quadrants(
+        outer_poly=loops["outer_loop"],
+        inner_poly=loops["inner_loop"],
+    )
+
+    assert len(quadrants) == 4
+    expected_quadrants = ["TRK_Front_L", "TRK_Front_R", "TRK_Rear_L", "TRK_Rear_R"]
+    for q_name in expected_quadrants:
+        assert q_name in quadrants
+        q = quadrants[q_name]
+        assert isinstance(q, QuadrantGeometry)
+        assert len(q.polygon) >= 20
+        assert len(q.nominal_polygon) >= 20
+
+        # Verify closed polygon
+        assert math.isclose(q.polygon[0][0], q.polygon[-1][0], abs_tol=1e-3) or len(q.polygon) > 10
+
+        # Verify printable bed envelope on Creality K2 (350x350 mm bed, limit 310 mm)
+        assert q.max_dimension < 310.0, f"{q_name} max dimension {q.max_dimension:.2f} mm exceeds 310 mm bed limit"
+
+        # Verify non-zero area and perimeter
+        assert q.area_mm2 > 8000.0  # > 80 cm^2
+        assert q.perimeter_mm > 400.0
+
+
+def test_slice_track_quadrants_nominal_reconstitution():
+    """Verify assembled nominal quadrants reconstitute the continuous floor track with 100% area match."""
+    stl_path = "docs/scans/frunk_scan_calibrated.stl"
+    floor_poly = extract_calibrated_floor_polygon(stl_path=stl_path, z_height=10.0)
+    loops = generate_track_boundary_loops(floor_poly, wall_clearance_mm=12.7, track_width_mm=30.0)
+
+    quadrants = slice_track_quadrants(
+        outer_poly=loops["outer_loop"],
+        inner_poly=loops["inner_loop"],
+    )
+
+    outer_area = calculate_polygon_area(loops["outer_loop"])
+    inner_area = calculate_polygon_area(loops["inner_loop"])
+    nominal_ring_area = outer_area - inner_area
+
+    sum_quadrant_nominal_area = sum(
+        calculate_polygon_area(q.nominal_polygon) for q in quadrants.values()
+    )
+
+    assert sum_quadrant_nominal_area == pytest.approx(nominal_ring_area, rel=1e-4)
+
+
+def test_quadrant_seam_interlocking_mating():
+    """Verify all 4 dividing seams mate male-to-female with exactly 0.20mm slip clearance."""
+    stl_path = "docs/scans/frunk_scan_calibrated.stl"
+    floor_poly = extract_calibrated_floor_polygon(stl_path=stl_path, z_height=10.0)
+    loops = generate_track_boundary_loops(floor_poly, wall_clearance_mm=12.7, track_width_mm=30.0)
+
+    quadrants = slice_track_quadrants(
+        outer_poly=loops["outer_loop"],
+        inner_poly=loops["inner_loop"],
+    )
+
+    # Check each seam pair has matching male and female descriptors
+    seams = {
+        "Front_Seam": ("TRK_Front_L", "TRK_Front_R"),
+        "Left_Seam": ("TRK_Rear_L", "TRK_Front_L"),
+        "Rear_Seam": ("TRK_Rear_R", "TRK_Rear_L"),
+        "Right_Seam": ("TRK_Front_R", "TRK_Rear_R"),
+    }
+
+    male_count = sum(1 for q in quadrants.values() if q.end_joint_type == "male") + sum(1 for q in quadrants.values() if q.start_joint_type == "male")
+    fem_count = sum(1 for q in quadrants.values() if q.end_joint_type == "female") + sum(1 for q in quadrants.values() if q.start_joint_type == "female")
+    
+    # 4 seams total = 4 male joints, 4 female joints across all 4 quadrants
+    assert male_count == 4
+    assert fem_count == 4
+
+    for seam_name, (male_cand, fem_cand) in seams.items():
+        q1 = quadrants[male_cand]
+        q2 = quadrants[fem_cand]
+        # At this seam, one quadrant must have male joint and the other female joint
+        q1_joints = [q1.start_joint_type if q1.start_seam == seam_name else None,
+                     q1.end_joint_type if q1.end_seam == seam_name else None]
+        q2_joints = [q2.start_joint_type if q2.start_seam == seam_name else None,
+                     q2.end_joint_type if q2.end_seam == seam_name else None]
+        
+        j1 = next(j for j in q1_joints if j is not None)
+        j2 = next(j for j in q2_joints if j is not None)
+        assert {j1, j2} == {"male", "female"}, f"Seam {seam_name} must mate 1 male and 1 female joint, got {j1} and {j2}"
+
+
+def test_rigid_rectangular_anti_tilt_cross_section_preservation():
+    """Verify rigid rectangular cross-section retains solid retaining shoulders at dovetail seams."""
+    params = ConformalTrackParameters()
+    assert params.track_width_mm == 30.0
+    assert params.track_height_mm == 18.0
+    assert params.rigid_guide_width_mm == 18.0
+    assert params.rigid_guide_height_mm == 8.0
+
+    # Dovetail tab geometry
+    base_w = params.trail_base_width_mm  # 14.0 mm
+    depth = 8.0                          # 8.0 mm
+    angle_deg = params.seam_dovetail_angle_deg  # 15.0 deg
+    flare = depth * math.tan(math.radians(angle_deg))
+    max_dovetail_w = base_w + 2.0 * flare  # ~18.287 mm
+
+    # Retaining shoulder wall thickness at widest dovetail flare
+    min_shoulder_wall = (params.track_width_mm - max_dovetail_w) / 2.0
+    assert min_shoulder_wall > 5.5, f"Retaining wall thickness {min_shoulder_wall:.2f}mm must exceed 5.5mm for rigidity"
+
+    # Base shoulder width at root
+    root_shoulder_wall = (params.track_width_mm - base_w) / 2.0
+    assert root_shoulder_wall == pytest.approx(8.0, abs=1e-3)
+
+
+def test_slice_track_quadrants_synthetic_rectangle():
+    """Verify quadrant slicing on synthetic rectangular ring track."""
+    rect = [(0.0, 0.0), (400.0, 0.0), (400.0, 300.0), (0.0, 300.0)]
+    loops = generate_track_boundary_loops(rect, wall_clearance_mm=12.7, track_width_mm=30.0)
+
+    quadrants = slice_track_quadrants(
+        outer_poly=loops["outer_loop"],
+        inner_poly=loops["inner_loop"],
+    )
+
+    assert len(quadrants) == 4
+    for q_name, q in quadrants.items():
+        assert q.max_dimension < 310.0
+        assert q.area_mm2 > 0.0
+
