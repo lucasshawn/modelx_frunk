@@ -1,14 +1,14 @@
 """
-Tesla Model X 2017 Frunk Conformal Floor Track & Sliding Post System
-Autodesk Fusion 360 - Standalone All-In-One Script
+Tesla Model X 2017 Frunk Conformal Modular Divider System
+Autodesk Fusion 360 - Complete Assembly Script
 
-GENERATES:
-  1. TRK_Front_L       - Front-Left Stepped/Flanged Floor Rail Quadrant (< 310 mm bed fit)
-  2. TRK_Front_R       - Front-Right Stepped/Flanged Floor Rail Quadrant (< 310 mm bed fit)
-  3. TRK_Rear_L        - Rear-Left Stepped/Flanged Floor Rail Quadrant (< 310 mm bed fit)
-  4. TRK_Rear_R        - Rear-Right Stepped/Flanged Floor Rail Quadrant (< 310 mm bed fit)
-  5. PST_Slide_Upright - Sliding Post with wrap-around captive base shoe
-  6. SLAT_Segment_6in  - 6-inch modular interlocking cross-member slat
+Creates separate, independent components in Fusion 360:
+  1. TRK_Front_L       - Front-Left Flanged Rail Quadrant (< 310 mm)
+  2. TRK_Front_R       - Front-Right Flanged Rail Quadrant (< 310 mm)
+  3. TRK_Rear_L        - Rear-Left Flanged Rail Quadrant (< 310 mm)
+  4. TRK_Rear_R        - Rear-Right Flanged Rail Quadrant (< 310 mm)
+  5. PST_Slide_Upright - Sliding Post with captive base shoe and vertical guide channel
+  6. SLAT_Segment_6in  - 6-inch modular interlocking cross-member divider slat
 """
 
 import math
@@ -35,6 +35,10 @@ class SystemParameters:
     rail_neck_width_mm: float = 16.0     # Upper neck width
     rail_neck_height_mm: float = 10.0    # Upper neck height (Total rail height = 18.0 mm)
     post_height_mm: float = 250.0        # Upright post column height
+    post_col_size_mm: float = 22.0       # Upright column cross-section
+    shoe_width_mm: float = 44.0          # Base shoe width
+    shoe_length_mm: float = 40.0         # Base shoe length along track
+    shoe_height_mm: float = 24.0         # Base shoe height
     slot_width_mm: float = 6.4           # Guide slot for 5mm cross slats
     slot_depth_mm: float = 8.0           # Guide slot depth
     slat_length_mm: float = 152.4        # 6.0 in modular slat segment length
@@ -44,10 +48,6 @@ class SystemParameters:
     dovetail_d_mm: float = 8.0           # Seam dovetail depth
     dovetail_ang_deg: float = 15.0       # 15 deg dovetail half-angle
     tol_slip_mm: float = 0.20            # 3D printing slip clearance
-
-    @property
-    def total_rail_height_cm(self) -> float:
-        return (self.rail_base_height_mm + self.rail_neck_height_mm) / 10.0
 
 
 def _create_pt(x_cm: float, y_cm: float, z_cm: float = 0.0):
@@ -226,11 +226,57 @@ def generate_watertight_quadrants(
     return cleaned_dict
 
 
+def get_subcomponent(root_comp: Any, comp_name: str) -> Any:
+    """Creates a new dedicated subcomponent in Fusion 360 to prevent body merging."""
+    if FUSION_AVAILABLE:
+        transform = adsk.core.Matrix3D.create()
+        occ = root_comp.occurrences.addNewComponent(transform)
+        comp = occ.component
+        comp.name = comp_name
+        return comp
+    else:
+        class MockItem:
+            def __init__(self, name=""): self.name = name
+        class MockBodies:
+            def __init__(self): self.items = []
+            @property
+            def count(self): return len(self.items)
+            def item(self, idx): return self.items[idx]
+        class MockCurves:
+            def __init__(self): self.sketchLines = self
+            def addByTwoPoints(self, p1, p2): return None
+            def addTwoPointRectangle(self, p1, p2): return None
+        class MockProfile:
+            pass
+        class MockProfiles:
+            @property
+            def count(self): return 1
+            def item(self, idx): return MockProfile()
+            def __len__(self): return 1
+        class MockSketch:
+            def __init__(self):
+                self.sketchCurves = MockCurves()
+                self.profiles = MockProfiles()
+        class MockSketches:
+            def add(self, plane): return MockSketch()
+        class MockExtrude:
+            def addSimple(self, prof, dist, op): return None
+        class MockFeatures:
+            def __init__(self): self.extrudeFeatures = MockExtrude()
+        class MockComp:
+            def __init__(self, name):
+                self.name = name
+                self.sketches = MockSketches()
+                self.features = MockFeatures()
+                self.bRepBodies = MockBodies()
+        return MockComp(comp_name)
+
+
 def build_system(root_comp: Any, params: SystemParameters):
-    sketches = root_comp.sketches
     plane_xy = root_comp.xYConstructionPlane if hasattr(root_comp, "xYConstructionPlane") else None
     op_new = adsk.fusion.FeatureOperations.NewBodyFeatureOperation if FUSION_AVAILABLE else 0
     op_join = adsk.fusion.FeatureOperations.JoinFeatureOperation if FUSION_AVAILABLE else 1
+    op_cut = adsk.fusion.FeatureOperations.CutFeatureOperation if FUSION_AVAILABLE else 2
 
     half_w = (params.width_mm / 2.0) - params.wall_clearance_mm
     half_d = (params.depth_mm / 2.0) - params.wall_clearance_mm
@@ -241,63 +287,132 @@ def build_system(root_comp: Any, params: SystemParameters):
     h_base_cm = params.rail_base_height_mm / 10.0
     h_neck_cm = params.rail_neck_height_mm / 10.0
 
+    # 1. Build 4 Interlocking Track Quadrants as Independent Components
     for name in ["TRK_Front_L", "TRK_Front_R", "TRK_Rear_L", "TRK_Rear_R"]:
+        comp = get_subcomponent(root_comp, name)
+        sketches = comp.sketches
+
         poly_base = quads_base[name]
         poly_neck = quads_neck[name]
 
-        # 1. Base flange extrusion in +Z (0 to h_base_cm)
+        # Base flange extrusion
         sketch_b = sketches.add(plane_xy)
         pts_b = [_create_pt(p[0] / 10.0, p[1] / 10.0, 0.0) for p in poly_base]
         for i in range(len(pts_b)):
             sketch_b.sketchCurves.sketchLines.addByTwoPoints(pts_b[i], pts_b[(i + 1) % len(pts_b)])
 
         if FUSION_AVAILABLE and len(sketch_b.profiles) > 0:
-            root_comp.features.extrudeFeatures.addSimple(sketch_b.profiles.item(0), adsk.core.ValueInput.createByReal(h_base_cm), op_new)
-            if root_comp.bRepBodies.count > 0:
-                root_comp.bRepBodies.item(root_comp.bRepBodies.count - 1).name = name
+            comp.features.extrudeFeatures.addSimple(sketch_b.profiles.item(0), adsk.core.ValueInput.createByReal(h_base_cm), op_new)
+            if comp.bRepBodies.count > 0:
+                comp.bRepBodies.item(comp.bRepBodies.count - 1).name = name + "_Base"
 
-        # 2. Upper neck extrusion in +Z (joining onto base, rising from h_base_cm to total height)
+        # Upper neck extrusion
         sketch_n = sketches.add(plane_xy)
         pts_n = [_create_pt(p[0] / 10.0, p[1] / 10.0, 0.0) for p in poly_neck]
         for i in range(len(pts_n)):
             sketch_n.sketchCurves.sketchLines.addByTwoPoints(pts_n[i], pts_n[(i + 1) % len(pts_n)])
 
         if FUSION_AVAILABLE and len(sketch_n.profiles) > 0:
-            root_comp.features.extrudeFeatures.addSimple(sketch_n.profiles.item(0), adsk.core.ValueInput.createByReal(h_base_cm + h_neck_cm), op_join)
+            comp.features.extrudeFeatures.addSimple(sketch_n.profiles.item(0), adsk.core.ValueInput.createByReal(h_base_cm + h_neck_cm), op_join)
 
-    # 3. Build Sliding Upright Post (`PST_Slide_Upright`)
-    post_x = -100.0
-    post_y = half_d - params.rail_base_width_mm / 2.0
+    # 2. Build Sliding Upright Post (`PST_Slide_Upright`) with Captive Base Shoe and Slot
+    post_comp = get_subcomponent(root_comp, "PST_Slide_Upright")
+    post_sketches = post_comp.sketches
 
-    sketch_post = sketches.add(plane_xy)
-    shoe_w_cm = 4.2
-    shoe_l_cm = 3.6
-    px = post_x / 10.0
-    py = post_y / 10.0
-    p1 = _create_pt(px - shoe_l_cm / 2.0, py - shoe_w_cm / 2.0, 0.0)
-    p2 = _create_pt(px + shoe_l_cm / 2.0, py + shoe_w_cm / 2.0, 0.0)
-    sketch_post.sketchCurves.sketchLines.addTwoPointRectangle(p1, p2)
+    post_x = -150.0  # mm along front rail
+    post_y = half_d - params.rail_base_width_mm / 2.0  # Centerline of front rail
+    px_cm = post_x / 10.0
+    py_cm = post_y / 10.0
 
-    if FUSION_AVAILABLE and len(sketch_post.profiles) > 0:
-        root_comp.features.extrudeFeatures.addSimple(sketch_post.profiles.item(0), adsk.core.ValueInput.createByReal(params.post_height_mm / 10.0), op_new)
-        if root_comp.bRepBodies.count > 0:
-            root_comp.bRepBodies.item(root_comp.bRepBodies.count - 1).name = "PST_Slide_Upright"
+    shoe_l_cm = params.shoe_length_mm / 10.0 # 4.0 cm along track
+    shoe_w_cm = params.shoe_width_mm / 10.0  # 4.4 cm across track
+    shoe_h_cm = params.shoe_height_mm / 10.0 # 2.4 cm
 
-    # 4. Build 6" Modular Interlocking Slat (`SLAT_Segment_6in`)
-    sketch_slat = sketches.add(plane_xy)
-    slat_ox = 60.0 / 10.0
+    # Step A: Extrude outer base shoe block
+    sketch_shoe = post_sketches.add(plane_xy)
+    sp1 = _create_pt(px_cm - shoe_l_cm / 2.0, py_cm - shoe_w_cm / 2.0, 0.0)
+    sp2 = _create_pt(px_cm + shoe_l_cm / 2.0, py_cm + shoe_w_cm / 2.0, 0.0)
+    sketch_shoe.sketchCurves.sketchLines.addTwoPointRectangle(sp1, sp2)
+
+    if FUSION_AVAILABLE and len(sketch_shoe.profiles) > 0:
+        post_comp.features.extrudeFeatures.addSimple(sketch_shoe.profiles.item(0), adsk.core.ValueInput.createByReal(shoe_h_cm), op_new)
+
+    # Step B: Cut captive T-slot tunnel through base shoe
+    # Tunnel profile matches flanged rail with +0.25mm clearance
+    tol_cm = 0.025
+    r_bw_cm = (params.rail_base_width_mm / 20.0) + tol_cm  # 1.525 cm
+    r_bh_cm = (params.rail_base_height_mm / 10.0) + tol_cm  # 0.825 cm
+    r_nw_cm = (params.rail_neck_width_mm / 20.0) + tol_cm  # 0.825 cm
+    r_nh_cm = ((params.rail_base_height_mm + params.rail_neck_height_mm) / 10.0) + tol_cm # 1.825 cm
+
+    sketch_tunnel = post_sketches.add(plane_xy)
+    # Cut base flange slot
+    cut_b1 = _create_pt(px_cm - shoe_l_cm, py_cm - r_bw_cm, 0.0)
+    cut_b2 = _create_pt(px_cm + shoe_l_cm, py_cm + r_bw_cm, 0.0)
+    sketch_tunnel.sketchCurves.sketchLines.addTwoPointRectangle(cut_b1, cut_b2)
+
+    # Cut neck slot
+    sketch_neck_cut = post_sketches.add(plane_xy)
+    cut_n1 = _create_pt(px_cm - shoe_l_cm, py_cm - r_nw_cm, 0.0)
+    cut_n2 = _create_pt(px_cm + shoe_l_cm, py_cm + r_nw_cm, 0.0)
+    sketch_neck_cut.sketchCurves.sketchLines.addTwoPointRectangle(cut_n1, cut_n2)
+
+    if FUSION_AVAILABLE:
+        if len(sketch_tunnel.profiles) > 0:
+            post_comp.features.extrudeFeatures.addSimple(sketch_tunnel.profiles.item(0), adsk.core.ValueInput.createByReal(r_bh_cm), op_cut)
+        if len(sketch_neck_cut.profiles) > 0:
+            post_comp.features.extrudeFeatures.addSimple(sketch_neck_cut.profiles.item(0), adsk.core.ValueInput.createByReal(r_nh_cm), op_cut)
+
+    # Step C: Extrude Upright Column from top of shoe up to total height
+    col_size_cm = params.post_col_size_mm / 10.0
+    post_tot_h_cm = params.post_height_mm / 10.0
+    sketch_col = post_sketches.add(plane_xy)
+    cp1 = _create_pt(px_cm - col_size_cm / 2.0, py_cm - col_size_cm / 2.0, 0.0)
+    cp2 = _create_pt(px_cm + col_size_cm / 2.0, py_cm + col_size_cm / 2.0, 0.0)
+    sketch_col.sketchCurves.sketchLines.addTwoPointRectangle(cp1, cp2)
+
+    if FUSION_AVAILABLE and len(sketch_col.profiles) > 0:
+        post_comp.features.extrudeFeatures.addSimple(sketch_col.profiles.item(0), adsk.core.ValueInput.createByReal(post_tot_h_cm), op_join)
+
+    # Step D: Cut Vertical Slot down the inner face of the post column (facing inward toward Y=0)
+    slot_w_cm = params.slot_width_mm / 10.0  # 0.64 cm
+    slot_d_cm = params.slot_depth_mm / 10.0  # 0.80 cm
+    sketch_slot = post_sketches.add(plane_xy)
+    slp1 = _create_pt(px_cm - slot_w_cm / 2.0, py_cm - col_size_cm / 2.0 - 0.1, 0.0)
+    slp2 = _create_pt(px_cm + slot_w_cm / 2.0, py_cm - col_size_cm / 2.0 + slot_d_cm, 0.0)
+    sketch_slot.sketchCurves.sketchLines.addTwoPointRectangle(slp1, slp2)
+
+    if FUSION_AVAILABLE and len(sketch_slot.profiles) > 0:
+        post_comp.features.extrudeFeatures.addSimple(sketch_slot.profiles.item(0), adsk.core.ValueInput.createByReal(post_tot_h_cm), op_cut)
+
+    # 3. Build 6" Modular Interlocking Slat (`SLAT_Segment_6in`) with Male/Female Dovetails
+    slat_comp = get_subcomponent(root_comp, "SLAT_Segment_6in")
+    slat_sketches = slat_comp.sketches
+
+    slat_ox = 0.0
     slat_oy = 0.0
     s_l_cm = params.slat_length_mm / 10.0  # 15.24 cm (6.0 in)
-    s_t_cm = params.slat_thickness_mm / 10.0 # 0.5 cm
-    s_h_cm = params.slat_height_mm / 10.0   # 6.0 cm
-    sp1 = _create_pt(slat_ox, slat_oy - s_t_cm / 2.0, 0.0)
-    sp2 = _create_pt(slat_ox + s_l_cm, slat_oy + s_t_cm / 2.0, 0.0)
-    sketch_slat.sketchCurves.sketchLines.addTwoPointRectangle(sp1, sp2)
+    s_t_cm = params.slat_thickness_mm / 10.0 # 0.50 cm
+    s_h_cm = params.slat_height_mm / 10.0   # 6.00 cm
+
+    # Draw 6" slat with 15° male dovetail tenon on left and female dovetail mortise on right
+    sketch_slat = slat_sketches.add(plane_xy)
+    slat_pts = [
+        (-s_l_cm / 2.0, -s_t_cm / 2.0),
+        (-s_l_cm / 2.0 - 0.6, -s_t_cm / 4.0),  # Male dovetail tab on left
+        (-s_l_cm / 2.0 - 0.6, s_t_cm / 4.0),
+        (-s_l_cm / 2.0, s_t_cm / 2.0),
+        (s_l_cm / 2.0, s_t_cm / 2.0),
+        (s_l_cm / 2.0 - 0.6, s_t_cm / 4.0),   # Female dovetail pocket on right
+        (s_l_cm / 2.0 - 0.6, -s_t_cm / 4.0),
+        (s_l_cm / 2.0, -s_t_cm / 2.0)
+    ]
+    s_pts = [_create_pt(p[0], p[1], 0.0) for p in slat_pts]
+    for i in range(len(s_pts)):
+        sketch_slat.sketchCurves.sketchLines.addByTwoPoints(s_pts[i], s_pts[(i + 1) % len(s_pts)])
 
     if FUSION_AVAILABLE and len(sketch_slat.profiles) > 0:
-        root_comp.features.extrudeFeatures.addSimple(sketch_slat.profiles.item(0), adsk.core.ValueInput.createByReal(s_h_cm), op_new)
-        if root_comp.bRepBodies.count > 0:
-            root_comp.bRepBodies.item(root_comp.bRepBodies.count - 1).name = "SLAT_Segment_6in"
+        slat_comp.features.extrudeFeatures.addSimple(sketch_slat.profiles.item(0), adsk.core.ValueInput.createByReal(s_h_cm), op_new)
 
 
 def run(context=None):
@@ -321,39 +436,11 @@ def run(context=None):
 
             root_comp = design.rootComponent
         else:
-            class MockItem:
-                def __init__(self, name=""): self.name = name
-            class MockBodies:
-                def __init__(self): self.items = []
-                @property
-                def count(self): return len(self.items)
-                def item(self, idx): return self.items[idx]
-            class MockCurves:
-                def __init__(self): self.sketchLines = self
-                def addByTwoPoints(self, p1, p2): return None
-                def addTwoPointRectangle(self, p1, p2): return None
-            class MockProfile:
-                pass
-            class MockProfiles:
-                @property
-                def count(self): return 1
-                def item(self, idx): return MockProfile()
-                def __len__(self): return 1
-            class MockSketch:
-                def __init__(self):
-                    self.sketchCurves = MockCurves()
-                    self.profiles = MockProfiles()
-            class MockSketches:
-                def add(self, plane): return MockSketch()
-            class MockExtrude:
-                def addSimple(self, prof, dist, op): return None
-            class MockFeatures:
-                def __init__(self): self.extrudeFeatures = MockExtrude()
             class MockRoot:
                 def __init__(self):
-                    self.sketches = MockSketches()
-                    self.features = MockFeatures()
-                    self.bRepBodies = MockBodies()
+                    self.occurrences = self
+                def addNewComponent(self, trans):
+                    return None
             root_comp = MockRoot()
 
         params = SystemParameters()
@@ -361,16 +448,19 @@ def run(context=None):
 
         if ui:
             ui.messageBox(
-                "Tesla Model X Frunk Floor Track & Sliding Post System Generated!\n\n"
-                "All 4 quadrants now feature the continuous stepped T-rail with 15° dovetails:\n"
-                "  1. TRK_Front_L (Stepped T-Rail, Front-Left with 15° Dovetail)\n"
-                "  2. TRK_Front_R (Stepped T-Rail, Front-Right with 15° Dovetail)\n"
-                "  3. TRK_Rear_L (Stepped T-Rail, Rear-Left with 15° Dovetail)\n"
-                "  4. TRK_Rear_R (Stepped T-Rail, Rear-Right with 15° Dovetail)\n"
-                "  5. PST_Slide_Upright (Sliding Post with wrap-around captive base shoe)\n"
+                "Tesla Model X Frunk Modular System Generated!\n\n"
+                "Components Created (as distinct independent assemblies):\n"
+                "  1. TRK_Front_L (Front-Left Flanged Rail Quadrant)\n"
+                "  2. TRK_Front_R (Front-Right Flanged Rail Quadrant)\n"
+                "  3. TRK_Rear_L (Rear-Left Flanged Rail Quadrant)\n"
+                "  4. TRK_Rear_R (Rear-Right Flanged Rail Quadrant)\n"
+                "  5. PST_Slide_Upright (Sliding Post with wrap-around captive base shoe & guide slot)\n"
                 "  6. SLAT_Segment_6in (6-inch modular interlocking cross slat)\n\n"
-                "The complete perimeter now has the rigid second layer!",
-                "Conformal Floor & Sliding System Ready"
+                "How it works:\n"
+                "  - The 4 track quadrants interlock at the 4 corners to form the complete perimeter.\n"
+                "  - Posts wrap around the stepped rail and slide freely anywhere along the track!\n"
+                "  - Cross slats drop straight down into facing posts to partition the frunk.",
+                "Modular System Ready"
             )
         else:
             print("Headless Execution Complete!")
