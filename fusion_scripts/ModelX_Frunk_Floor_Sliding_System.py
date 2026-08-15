@@ -3,11 +3,11 @@ Tesla Model X 2017 Frunk Conformal Floor Track & Sliding Post System
 Autodesk Fusion 360 - Standalone All-In-One Script
 
 GENERATES:
-  1. TRK_Front_L       - Front-Left Flanged Floor Rail Quadrant (< 310 mm bed fit)
-  2. TRK_Front_R       - Front-Right Flanged Floor Rail Quadrant (< 310 mm bed fit)
-  3. TRK_Rear_L        - Rear-Left Flanged Floor Rail Quadrant (< 310 mm bed fit)
-  4. TRK_Rear_R        - Rear-Right Flanged Floor Rail Quadrant (< 310 mm bed fit)
-  5. PST_Slide_Upright - Sliding Post with captive base shoe that wraps around the floor rail
+  1. TRK_Front_L       - Front-Left Stepped/Flanged Floor Rail Quadrant (< 310 mm bed fit)
+  2. TRK_Front_R       - Front-Right Stepped/Flanged Floor Rail Quadrant (< 310 mm bed fit)
+  3. TRK_Rear_L        - Rear-Left Stepped/Flanged Floor Rail Quadrant (< 310 mm bed fit)
+  4. TRK_Rear_R        - Rear-Right Stepped/Flanged Floor Rail Quadrant (< 310 mm bed fit)
+  5. PST_Slide_Upright - Sliding Post with wrap-around captive base shoe
   6. SLAT_Segment_6in  - 6-inch modular interlocking cross-member slat
 """
 
@@ -58,10 +58,9 @@ def _create_pt(x_cm: float, y_cm: float, z_cm: float = 0.0):
     return MockPt(x_cm, y_cm, z_cm)
 
 
-def calculate_dovetail_points(
+def calculate_dovetail_tab(
     base_center: Tuple[float, float],
     normal: Tuple[float, float],
-    male: bool,
     base_w: float = 14.0,
     depth: float = 8.0,
     angle_deg: float = 15.0,
@@ -72,138 +71,159 @@ def calculate_dovetail_points(
 
     rad = math.radians(angle_deg)
     flare = depth * math.tan(rad)
-    offset = -tol if male else tol
-
-    w_root = (base_w + 2.0 * offset) / 2.0
-    w_tip = (base_w + 2.0 * flare + 2.0 * offset) / 2.0
-    ext = depth if male else -depth
+    w_root = (base_w - 2.0 * tol) / 2.0
+    w_tip = (base_w + 2.0 * flare - 2.0 * tol) / 2.0
 
     bx, by = base_center
     p0 = (bx - tx * w_root, by - ty * w_root)
-    p1 = (bx + nx * ext - tx * w_tip, by + ny * ext - ty * w_tip)
-    p2 = (bx + nx * ext + tx * w_tip, by + ny * ext + ty * w_tip)
+    p1 = (bx + nx * depth - tx * w_tip, by + ny * depth - ty * w_tip)
+    p2 = (bx + nx * depth + tx * w_tip, by + ny * depth + ty * w_tip)
     p3 = (bx + tx * w_root, by + ty * w_root)
 
     return [p0, p1, p2, p3]
 
 
-def generate_quadrant_polygons(params: SystemParameters, track_w: float) -> Dict[str, List[Tuple[float, float]]]:
-    """Generates 2D loops for the 4 quadrants."""
-    half_w = (params.width_mm / 2.0) - params.wall_clearance_mm
-    half_d = (params.depth_mm / 2.0) - params.wall_clearance_mm
-    cr_out = 55.0
+def calculate_dovetail_pocket(
+    base_center: Tuple[float, float],
+    normal: Tuple[float, float],
+    base_w: float = 14.0,
+    depth: float = 8.0,
+    angle_deg: float = 15.0,
+    tol: float = 0.20
+) -> List[Tuple[float, float]]:
+    nx, ny = normal
+    tx, ty = -ny, nx
+
+    rad = math.radians(angle_deg)
+    flare = depth * math.tan(rad)
+    w_root = (base_w + 2.0 * tol) / 2.0
+    w_tip = (base_w + 2.0 * flare + 2.0 * tol) / 2.0
+
+    bx, by = base_center
+    p0 = (bx - tx * w_root, by - ty * w_root)
+    p1 = (bx - nx * depth - tx * w_tip, by - ny * depth - ty * w_tip)
+    p2 = (bx - nx * depth + tx * w_tip, by - ny * depth + ty * w_tip)
+    p3 = (bx + tx * w_root, by + ty * w_root)
+
+    return [p0, p1, p2, p3]
+
+
+def generate_watertight_quadrants(
+    half_w: float,
+    half_d: float,
+    track_w: float,
+    cr_out: float = 55.0,
+    dt_w: float = 14.0,
+    dt_d: float = 8.0,
+    dt_a: float = 15.0,
+    tol: float = 0.20,
+    num_arc: int = 12
+) -> Dict[str, List[Tuple[float, float]]]:
     cr_in = max(cr_out - track_w, 15.0)
     cx_l, cx_r = -half_w + cr_out, half_w - cr_out
     cy_f, cy_r = half_d - cr_out, -half_d + cr_out
 
-    dt_w = params.dovetail_w_mm
-    dt_d = params.dovetail_d_mm
-    dt_a = params.dovetail_ang_deg
-    tol = params.tol_slip_mm
+    front_seam = (0.0, half_d - track_w / 2.0)
+    rear_seam = (0.0, -half_d + track_w / 2.0)
+    left_seam = (-half_w + track_w / 2.0, 0.0)
+    right_seam = (half_w - track_w / 2.0, 0.0)
 
     quads: Dict[str, List[Tuple[float, float]]] = {}
 
-    # 1. Front-Left (Female Pocket at Front Center, Male Tab at Left Mid)
+    # 1. TRK_Front_L: (X <= 0, Y >= 0)
     fl: List[Tuple[float, float]] = []
-    fl.append((0.0, half_d - track_w))
-    front_seam = (0.0, half_d - track_w / 2.0)
-    pock = calculate_dovetail_points(front_seam, (-1.0, 0.0), male=False, base_w=dt_w, depth=dt_d, angle_deg=dt_a, tol=tol)
-    fl.append((0.0, front_seam[1] - dt_w/2.0 - tol))
-    fl.extend(pock)
     fl.append((0.0, half_d))
     fl.append((cx_l, half_d))
-    for i in range(1, 12):
-        ang = math.pi / 2.0 + (i / 12.0) * (math.pi / 2.0)
+    for i in range(1, num_arc + 1):
+        ang = math.pi / 2.0 + (i / num_arc) * (math.pi / 2.0)
         fl.append((cx_l + cr_out * math.cos(ang), cy_f + cr_out * math.sin(ang)))
-    fl.append((-half_w, cy_f))
     fl.append((-half_w, 0.0))
-    left_seam = (-half_w + track_w / 2.0, 0.0)
-    tab = calculate_dovetail_points(left_seam, (0.0, -1.0), male=True, base_w=dt_w, depth=dt_d, angle_deg=dt_a, tol=tol)
-    fl.append((-half_w + (track_w - dt_w)/2.0, 0.0))
-    fl.extend(tab)
+    tab_l = calculate_dovetail_tab(left_seam, (0.0, -1.0), base_w=dt_w, depth=dt_d, angle_deg=dt_a, tol=tol)
+    fl.extend(tab_l)
     fl.append((-half_w + track_w, 0.0))
     fl.append((-half_w + track_w, cy_f))
-    for i in range(1, 12):
-        ang = math.pi - (i / 12.0) * (math.pi / 2.0)
+    for i in range(1, num_arc + 1):
+        ang = math.pi - (i / num_arc) * (math.pi / 2.0)
         fl.append((cx_l + cr_in * math.cos(ang), cy_f + cr_in * math.sin(ang)))
-    fl.append((cx_l, half_d - track_w))
+    fl.append((0.0, half_d - track_w))
+    pock_f = calculate_dovetail_pocket(front_seam, (-1.0, 0.0), base_w=dt_w, depth=dt_d, angle_deg=dt_a, tol=tol)
+    fl.extend(pock_f)
     quads["TRK_Front_L"] = fl
 
-    # 2. Front-Right (Male Tab at Front Center, Female Pocket at Right Mid)
+    # 2. TRK_Front_R: (X >= 0, Y >= 0)
     fr: List[Tuple[float, float]] = []
     fr.append((0.0, half_d))
-    f_tab = calculate_dovetail_points(front_seam, (-1.0, 0.0), male=True, base_w=dt_w, depth=dt_d, angle_deg=dt_a, tol=tol)
-    fr.append((0.0, front_seam[1] + dt_w/2.0))
-    fr.extend(f_tab)
+    tab_f = calculate_dovetail_tab(front_seam, (-1.0, 0.0), base_w=dt_w, depth=dt_d, angle_deg=dt_a, tol=tol)
+    fr.extend(tab_f)
     fr.append((0.0, half_d - track_w))
     fr.append((cx_r, half_d - track_w))
-    for i in range(1, 12):
-        ang = math.pi / 2.0 - (i / 12.0) * (math.pi / 2.0)
+    for i in range(1, num_arc + 1):
+        ang = math.pi / 2.0 - (i / num_arc) * (math.pi / 2.0)
         fr.append((cx_r + cr_in * math.cos(ang), cy_f + cr_in * math.sin(ang)))
-    fr.append((half_w - track_w, cy_f))
     fr.append((half_w - track_w, 0.0))
-    right_seam = (half_w - track_w / 2.0, 0.0)
-    r_pock = calculate_dovetail_points(right_seam, (0.0, -1.0), male=False, base_w=dt_w, depth=dt_d, angle_deg=dt_a, tol=tol)
-    fr.append((half_w - track_w + (track_w - dt_w)/2.0 - tol, 0.0))
-    fr.extend(r_pock)
+    pock_r = calculate_dovetail_pocket(right_seam, (0.0, -1.0), base_w=dt_w, depth=dt_d, angle_deg=dt_a, tol=tol)
+    fr.extend(pock_r)
     fr.append((half_w, 0.0))
     fr.append((half_w, cy_f))
-    for i in range(1, 12):
-        ang = (i / 12.0) * (math.pi / 2.0)
+    for i in range(1, num_arc + 1):
+        ang = (i / num_arc) * (math.pi / 2.0)
         fr.append((cx_r + cr_out * math.cos(ang), cy_f + cr_out * math.sin(ang)))
     fr.append((cx_r, half_d))
     quads["TRK_Front_R"] = fr
 
-    # 3. Rear-Left (Female Pocket at Left Mid, Male Tab at Rear Center)
+    # 3. TRK_Rear_L: (X <= 0, Y <= 0)
     rl: List[Tuple[float, float]] = []
     rl.append((-half_w, 0.0))
-    l_pock = calculate_dovetail_points(left_seam, (0.0, -1.0), male=False, base_w=dt_w, depth=dt_d, angle_deg=dt_a, tol=tol)
-    rl.append((-half_w + (track_w - dt_w)/2.0 - tol, 0.0))
-    rl.extend(l_pock)
+    pock_l = calculate_dovetail_pocket(left_seam, (0.0, -1.0), base_w=dt_w, depth=dt_d, angle_deg=dt_a, tol=tol)
+    rl.extend(pock_l)
     rl.append((-half_w + track_w, 0.0))
     rl.append((-half_w + track_w, cy_r))
-    for i in range(1, 12):
-        ang = -math.pi + (i / 12.0) * (math.pi / 2.0)
+    for i in range(1, num_arc + 1):
+        ang = -math.pi + (i / num_arc) * (math.pi / 2.0)
         rl.append((cx_l + cr_in * math.cos(ang), cy_r + cr_in * math.sin(ang)))
-    rl.append((cx_l, -half_d + track_w))
     rl.append((0.0, -half_d + track_w))
-    rear_seam = (0.0, -half_d + track_w / 2.0)
-    r_tab = calculate_dovetail_points(rear_seam, (1.0, 0.0), male=True, base_w=dt_w, depth=dt_d, angle_deg=dt_a, tol=tol)
-    rl.append((0.0, rear_seam[1] - dt_w/2.0))
-    rl.extend(r_tab)
+    tab_rear = calculate_dovetail_tab(rear_seam, (1.0, 0.0), base_w=dt_w, depth=dt_d, angle_deg=dt_a, tol=tol)
+    rl.extend(tab_rear)
     rl.append((0.0, -half_d))
     rl.append((cx_l, -half_d))
-    for i in range(1, 12):
-        ang = -math.pi / 2.0 - (i / 12.0) * (math.pi / 2.0)
+    for i in range(1, num_arc + 1):
+        ang = -math.pi / 2.0 - (i / num_arc) * (math.pi / 2.0)
         rl.append((cx_l + cr_out * math.cos(ang), cy_r + cr_out * math.sin(ang)))
-    rl.append((-half_w, cy_r))
     quads["TRK_Rear_L"] = rl
 
-    # 4. Rear-Right (Female Pocket at Rear Center, Male Tab at Right Mid)
+    # 4. TRK_Rear_R: (X >= 0, Y <= 0)
     rr: List[Tuple[float, float]] = []
     rr.append((0.0, -half_d))
-    rear_pock = calculate_dovetail_points(rear_seam, (1.0, 0.0), male=False, base_w=dt_w, depth=dt_d, angle_deg=dt_a, tol=tol)
-    rr.append((0.0, rear_seam[1] - dt_w/2.0 - tol))
-    rr.extend(rear_pock)
+    pock_rear = calculate_dovetail_pocket(rear_seam, (1.0, 0.0), base_w=dt_w, depth=dt_d, angle_deg=dt_a, tol=tol)
+    rr.extend(pock_rear)
     rr.append((0.0, -half_d + track_w))
     rr.append((cx_r, -half_d + track_w))
-    for i in range(1, 12):
-        ang = -math.pi / 2.0 + (i / 12.0) * (math.pi / 2.0)
+    for i in range(1, num_arc + 1):
+        ang = -math.pi / 2.0 + (i / num_arc) * (math.pi / 2.0)
         rr.append((cx_r + cr_in * math.cos(ang), cy_r + cr_in * math.sin(ang)))
-    rr.append((half_w - track_w, cy_r))
     rr.append((half_w - track_w, 0.0))
-    r_tab2 = calculate_dovetail_points(right_seam, (0.0, -1.0), male=True, base_w=dt_w, depth=dt_d, angle_deg=dt_a, tol=tol)
-    rr.append((half_w - track_w + (track_w - dt_w)/2.0, 0.0))
-    rr.extend(r_tab2)
+    tab_r = calculate_dovetail_tab(right_seam, (0.0, -1.0), base_w=dt_w, depth=dt_d, angle_deg=dt_a, tol=tol)
+    rr.extend(tab_r)
     rr.append((half_w, 0.0))
     rr.append((half_w, cy_r))
-    for i in range(1, 12):
-        ang = 0.0 - (i / 12.0) * (math.pi / 2.0)
+    for i in range(1, num_arc + 1):
+        ang = 0.0 - (i / num_arc) * (math.pi / 2.0)
         rr.append((cx_r + cr_out * math.cos(ang), cy_r + cr_out * math.sin(ang)))
     rr.append((cx_r, -half_d))
     quads["TRK_Rear_R"] = rr
 
-    return quads
+    # Clean redundant consecutive points
+    cleaned_dict: Dict[str, List[Tuple[float, float]]] = {}
+    for name, raw_pts in quads.items():
+        cleaned = []
+        for p in raw_pts:
+            if not cleaned or math.hypot(p[0]-cleaned[-1][0], p[1]-cleaned[-1][1]) > 1e-3:
+                cleaned.append(p)
+        if len(cleaned) > 1 and math.hypot(cleaned[0][0]-cleaned[-1][0], cleaned[0][1]-cleaned[-1][1]) < 1e-3:
+            cleaned.pop()
+        cleaned_dict[name] = cleaned
+
+    return cleaned_dict
 
 
 def build_system(root_comp: Any, params: SystemParameters):
@@ -212,9 +232,11 @@ def build_system(root_comp: Any, params: SystemParameters):
     op_new = adsk.fusion.FeatureOperations.NewBodyFeatureOperation if FUSION_AVAILABLE else 0
     op_join = adsk.fusion.FeatureOperations.JoinFeatureOperation if FUSION_AVAILABLE else 1
 
-    # Generate Flanged Floor Rail Quadrants (Assembled in place so you see the complete track)
-    quads_base = generate_quadrant_polygons(params, track_w=params.rail_base_width_mm)
-    quads_neck = generate_quadrant_polygons(params, track_w=params.rail_neck_width_mm)
+    half_w = (params.width_mm / 2.0) - params.wall_clearance_mm
+    half_d = (params.depth_mm / 2.0) - params.wall_clearance_mm
+
+    quads_base = generate_watertight_quadrants(half_w, half_d, track_w=params.rail_base_width_mm, tol=params.tol_slip_mm)
+    quads_neck = generate_watertight_quadrants(half_w, half_d, track_w=params.rail_neck_width_mm, tol=params.tol_slip_mm)
 
     h_base_cm = params.rail_base_height_mm / 10.0
     h_neck_cm = params.rail_neck_height_mm / 10.0
@@ -234,7 +256,7 @@ def build_system(root_comp: Any, params: SystemParameters):
             if root_comp.bRepBodies.count > 0:
                 root_comp.bRepBodies.item(root_comp.bRepBodies.count - 1).name = name
 
-        # 2. Upper neck extrusion in +Z (joining onto base, rising by h_neck_cm)
+        # 2. Upper neck extrusion in +Z (joining onto base, rising from h_base_cm to total height)
         sketch_n = sketches.add(plane_xy)
         pts_n = [_create_pt(p[0] / 10.0, p[1] / 10.0, 0.0) for p in poly_neck]
         for i in range(len(pts_n)):
@@ -243,10 +265,9 @@ def build_system(root_comp: Any, params: SystemParameters):
         if FUSION_AVAILABLE and len(sketch_n.profiles) > 0:
             root_comp.features.extrudeFeatures.addSimple(sketch_n.profiles.item(0), adsk.core.ValueInput.createByReal(h_base_cm + h_neck_cm), op_join)
 
-    # 3. Build Sliding Upright Post (`PST_Slide_Upright`) positioned directly on the front rail
-    # Shoe wraps around rail with 0.20mm slip clearance
-    post_x = -100.0  # mm (along front rail)
-    post_y = (params.depth_mm / 2.0) - params.wall_clearance_mm - params.rail_base_width_mm / 2.0
+    # 3. Build Sliding Upright Post (`PST_Slide_Upright`)
+    post_x = -100.0
+    post_y = half_d - params.rail_base_width_mm / 2.0
 
     sketch_post = sketches.add(plane_xy)
     shoe_w_cm = 4.2
@@ -262,9 +283,9 @@ def build_system(root_comp: Any, params: SystemParameters):
         if root_comp.bRepBodies.count > 0:
             root_comp.bRepBodies.item(root_comp.bRepBodies.count - 1).name = "PST_Slide_Upright"
 
-    # 4. Build 6" Modular Interlocking Slat (`SLAT_Segment_6in`) placed nearby
+    # 4. Build 6" Modular Interlocking Slat (`SLAT_Segment_6in`)
     sketch_slat = sketches.add(plane_xy)
-    slat_ox = 100.0 / 10.0
+    slat_ox = 60.0 / 10.0
     slat_oy = 0.0
     s_l_cm = params.slat_length_mm / 10.0  # 15.24 cm (6.0 in)
     s_t_cm = params.slat_thickness_mm / 10.0 # 0.5 cm
@@ -341,16 +362,14 @@ def run(context=None):
         if ui:
             ui.messageBox(
                 "Tesla Model X Frunk Floor Track & Sliding Post System Generated!\n\n"
-                "Bodies Created:\n"
-                "  1. TRK_Front_L (Flanged Floor Rail, Front-Left with 15° Dovetail)\n"
-                "  2. TRK_Front_R (Flanged Floor Rail, Front-Right with 15° Dovetail)\n"
-                "  3. TRK_Rear_L (Flanged Floor Rail, Rear-Left with 15° Dovetail)\n"
-                "  4. TRK_Rear_R (Flanged Floor Rail, Rear-Right with 15° Dovetail)\n"
+                "All 4 quadrants now feature the continuous stepped T-rail with 15° dovetails:\n"
+                "  1. TRK_Front_L (Stepped T-Rail, Front-Left with 15° Dovetail)\n"
+                "  2. TRK_Front_R (Stepped T-Rail, Front-Right with 15° Dovetail)\n"
+                "  3. TRK_Rear_L (Stepped T-Rail, Rear-Left with 15° Dovetail)\n"
+                "  4. TRK_Rear_R (Stepped T-Rail, Rear-Right with 15° Dovetail)\n"
                 "  5. PST_Slide_Upright (Sliding Post with wrap-around captive base shoe)\n"
                 "  6. SLAT_Segment_6in (6-inch modular interlocking cross slat)\n\n"
-                "How it works:\n"
-                "  - Posts slide onto the open rail ends BEFORE snapping the 4 dovetails together.\n"
-                "  - Once locked in the vehicle, posts slide freely anywhere along the perimeter track!",
+                "The complete perimeter now has the rigid second layer!",
                 "Conformal Floor & Sliding System Ready"
             )
         else:
