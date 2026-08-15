@@ -38,8 +38,8 @@ class SystemParameters:
     rail_neck_height_mm: float = 10.0    # Upper neck height (Total rail height = 18.0 mm)
     post_height_mm: float = 250.0        # Upright post column height
     post_col_size_mm: float = 22.0       # Upright column cross-section
-    shoe_width_mm: float = 44.0          # Base shoe width
-    shoe_length_mm: float = 40.0         # Base shoe length along track
+    shoe_width_mm: float = 40.0          # Base shoe width
+    shoe_length_mm: float = 42.0         # Base shoe length along track
     shoe_height_mm: float = 24.0         # Base shoe height
     slot_width_mm: float = 6.4           # Guide slot for 5mm cross slats
     slot_depth_mm: float = 8.0           # Guide slot depth
@@ -182,7 +182,7 @@ def generate_watertight_quadrants(
     rl.append((-half_w + track_w, cy_r))
     for i in range(1, num_arc + 1):
         a = -math.pi + (i / num_arc) * (math.pi / 2.0)
-        rl.append((cx_l + cr_in * math.cos(ang := a), cy_r + cr_in * math.sin(ang)))
+        rl.append((cx_l + cr_in * math.cos(a), cy_r + cr_in * math.sin(a)))
     rl.append((0.0, -half_d + track_w))
     tab_rear = make_tab_points((0.0, -half_d + track_w), (0.0, -half_d), (1.0, 0.0), tab_w=dt_w, tab_d=dt_d, flare_ang=dt_a, tol=tol)
     rl.extend(tab_rear[1:])
@@ -241,12 +241,12 @@ def build_system(root_comp: Any, params: SystemParameters):
     h_neck_cm = params.rail_neck_height_mm / 10.0
     h_tot_cm = h_base_cm + h_neck_cm
 
-    # 1. Build 4 Interlocking Two-Tier Track Quadrants as Distinct Solid BRep Bodies
+    # 1. Build 4 Interlocking Two-Tier Track Quadrants
     for name in ["TRK_Front_L", "TRK_Front_R", "TRK_Rear_L", "TRK_Rear_R"]:
         poly_base = quads_base[name]
         poly_neck = quads_neck[name]
 
-        # Step 1: Base flange extrusion as New Body (0 to h_base_cm)
+        # Step 1: Base flange extrusion
         sketch_b = sketches.add(plane_xy)
         pts_b = [_create_pt(p[0] / 10.0, p[1] / 10.0, 0.0) for p in poly_base]
         for i in range(len(pts_b)):
@@ -257,7 +257,7 @@ def build_system(root_comp: Any, params: SystemParameters):
             ext_b = root_comp.features.extrudeFeatures.addSimple(sketch_b.profiles.item(0), adsk.core.ValueInput.createByReal(h_base_cm), op_new)
             body_base = ext_b.bodies.item(0) if ext_b.bodies.count > 0 else None
 
-        # Step 2: Upper neck extrusion as New Body (0 to h_tot_cm)
+        # Step 2: Upper neck extrusion
         sketch_n = sketches.add(plane_xy)
         pts_n = [_create_pt(p[0] / 10.0, p[1] / 10.0, 0.0) for p in poly_neck]
         for i in range(len(pts_n)):
@@ -268,7 +268,7 @@ def build_system(root_comp: Any, params: SystemParameters):
             ext_n = root_comp.features.extrudeFeatures.addSimple(sketch_n.profiles.item(0), adsk.core.ValueInput.createByReal(h_tot_cm), op_new)
             body_neck = ext_n.bodies.item(0) if ext_n.bodies.count > 0 else None
 
-        # Step 3: Combine base and neck for THIS quadrant into one solid body
+        # Step 3: Combine base and neck for THIS quadrant
         if FUSION_AVAILABLE and body_base and body_neck:
             tools = adsk.core.ObjectCollection.create()
             tools.add(body_neck)
@@ -277,20 +277,23 @@ def build_system(root_comp: Any, params: SystemParameters):
             root_comp.features.combineFeatures.add(combine_input)
             body_base.name = name
 
-    # 2. Build Sliding Upright Post (`PST_Slide_Upright`) with Captive Base Shoe and Slot
+    # 2. Build Sliding Upright Post (`PST_Slide_Upright`) with aligned shoe and guide slot
     post_x = -150.0  # mm along front rail
-    post_y = half_d - params.rail_base_width_mm / 2.0  # Centerline of front rail
     px_cm = post_x / 10.0
-    py_cm = post_y / 10.0
 
-    shoe_l_cm = params.shoe_length_mm / 10.0 # 4.0 cm along track
-    shoe_w_cm = params.shoe_width_mm / 10.0  # 4.4 cm across track
-    shoe_h_cm = params.shoe_height_mm / 10.0 # 2.4 cm
+    # Align shoe to the front rail's outer wall boundary (Y = half_d)
+    shoe_l_cm = params.shoe_length_mm / 10.0  # 4.2 cm along track
+    shoe_w_cm = params.shoe_width_mm / 10.0   # 4.0 cm across track
+    shoe_h_cm = params.shoe_height_mm / 10.0  # 2.4 cm
+
+    # Outer wall of rail is at half_d. Shoe wraps from (half_d + 4mm) down to (half_d - 36mm)
+    shoe_y_max_cm = (half_d + 4.0) / 10.0
+    shoe_y_min_cm = (half_d + 4.0 - params.shoe_width_mm) / 10.0
 
     # Step A: Outer base shoe block
     sketch_shoe = sketches.add(plane_xy)
-    sp1 = _create_pt(px_cm - shoe_l_cm / 2.0, py_cm - shoe_w_cm / 2.0, 0.0)
-    sp2 = _create_pt(px_cm + shoe_l_cm / 2.0, py_cm + shoe_w_cm / 2.0, 0.0)
+    sp1 = _create_pt(px_cm - shoe_l_cm / 2.0, shoe_y_min_cm, 0.0)
+    sp2 = _create_pt(px_cm + shoe_l_cm / 2.0, shoe_y_max_cm, 0.0)
     sketch_shoe.sketchCurves.sketchLines.addTwoPointRectangle(sp1, sp2)
 
     body_shoe = None
@@ -298,12 +301,14 @@ def build_system(root_comp: Any, params: SystemParameters):
         ext_shoe = root_comp.features.extrudeFeatures.addSimple(sketch_shoe.profiles.item(0), adsk.core.ValueInput.createByReal(shoe_h_cm), op_new)
         body_shoe = ext_shoe.bodies.item(0) if ext_shoe.bodies.count > 0 else None
 
-    # Step B: Upright column
+    # Step B: Upright column (positioned above rail neck)
     col_size_cm = params.post_col_size_mm / 10.0
     post_tot_h_cm = params.post_height_mm / 10.0
+    col_y_center_cm = (half_d - params.rail_neck_width_mm / 2.0) / 10.0
+
     sketch_col = sketches.add(plane_xy)
-    cp1 = _create_pt(px_cm - col_size_cm / 2.0, py_cm - col_size_cm / 2.0, 0.0)
-    cp2 = _create_pt(px_cm + col_size_cm / 2.0, py_cm + col_size_cm / 2.0, 0.0)
+    cp1 = _create_pt(px_cm - col_size_cm / 2.0, col_y_center_cm - col_size_cm / 2.0, 0.0)
+    cp2 = _create_pt(px_cm + col_size_cm / 2.0, col_y_center_cm + col_size_cm / 2.0, 0.0)
     sketch_col.sketchCurves.sketchLines.addTwoPointRectangle(cp1, cp2)
 
     body_col = None
@@ -322,44 +327,46 @@ def build_system(root_comp: Any, params: SystemParameters):
         post_body = body_shoe
         post_body.name = "PST_Slide_Upright"
 
-    # Step C: Cut captive inverted T-slot tunnel through post shoe
+    # Step C: Cut captive inverted T-slot tunnel perfectly matching the two-tier rail
     tol_cm = 0.025
-    r_bw_cm = (params.rail_base_width_mm / 20.0) + tol_cm  # 1.525 cm
+    r_bw_cm = (params.rail_base_width_mm / 10.0) + tol_cm   # 3.025 cm
     r_bh_cm = (params.rail_base_height_mm / 10.0) + tol_cm  # 0.825 cm
-    r_nw_cm = (params.rail_neck_width_mm / 20.0) + tol_cm  # 0.825 cm
+    r_nw_cm = (params.rail_neck_width_mm / 10.0) + tol_cm   # 1.625 cm
     r_nh_cm = ((params.rail_base_height_mm + params.rail_neck_height_mm) / 10.0) + tol_cm # 1.825 cm
 
+    rail_outer_y_cm = (half_d + 0.25) / 10.0
+
+    # Cut 1: Base flange pocket
     sketch_tunnel = sketches.add(plane_xy)
-    cut_b1 = _create_pt(px_cm - shoe_l_cm, py_cm - r_bw_cm, 0.0)
-    cut_b2 = _create_pt(px_cm + shoe_l_cm, py_cm + r_bw_cm, 0.0)
+    cut_b1 = _create_pt(px_cm - shoe_l_cm, rail_outer_y_cm - r_bw_cm, 0.0)
+    cut_b2 = _create_pt(px_cm + shoe_l_cm, rail_outer_y_cm, 0.0)
     sketch_tunnel.sketchCurves.sketchLines.addTwoPointRectangle(cut_b1, cut_b2)
 
+    # Cut 2: Upper neck channel
     sketch_neck_cut = sketches.add(plane_xy)
-    cut_n1 = _create_pt(px_cm - shoe_l_cm, py_cm - r_nw_cm, 0.0)
-    cut_n2 = _create_pt(px_cm + shoe_l_cm, py_cm + r_nw_cm, 0.0)
+    cut_n1 = _create_pt(px_cm - shoe_l_cm, rail_outer_y_cm - r_nw_cm, 0.0)
+    cut_n2 = _create_pt(px_cm + shoe_l_cm, rail_outer_y_cm, 0.0)
     sketch_neck_cut.sketchCurves.sketchLines.addTwoPointRectangle(cut_n1, cut_n2)
 
     if FUSION_AVAILABLE and post_body:
-        # Cut flange pocket
         if len(sketch_tunnel.profiles) > 0:
             ext_cut1 = root_comp.features.extrudeFeatures.createInput(sketch_tunnel.profiles.item(0), adsk.fusion.FeatureOperations.CutFeatureOperation)
             ext_cut1.setDistanceExtent(False, adsk.core.ValueInput.createByReal(r_bh_cm))
             ext_cut1.participantBodies = [post_body]
             root_comp.features.extrudeFeatures.add(ext_cut1)
 
-        # Cut neck channel
         if len(sketch_neck_cut.profiles) > 0:
             ext_cut2 = root_comp.features.extrudeFeatures.createInput(sketch_neck_cut.profiles.item(0), adsk.fusion.FeatureOperations.CutFeatureOperation)
             ext_cut2.setDistanceExtent(False, adsk.core.ValueInput.createByReal(r_nh_cm))
             ext_cut2.participantBodies = [post_body]
             root_comp.features.extrudeFeatures.add(ext_cut2)
 
-    # Step D: Cut Vertical Guide Slot down the inner face of the post column
+    # Step D: Cut Vertical Guide Slot down the column (facing inward toward -Y)
     slot_w_cm = params.slot_width_mm / 10.0  # 0.64 cm
     slot_d_cm = params.slot_depth_mm / 10.0  # 0.80 cm
     sketch_slot = sketches.add(plane_xy)
-    slp1 = _create_pt(px_cm - slot_w_cm / 2.0, py_cm - col_size_cm / 2.0 - 0.1, 0.0)
-    slp2 = _create_pt(px_cm + slot_w_cm / 2.0, py_cm - col_size_cm / 2.0 + slot_d_cm, 0.0)
+    slp1 = _create_pt(px_cm - slot_w_cm / 2.0, col_y_center_cm - col_size_cm / 2.0 - 0.1, 0.0)
+    slp2 = _create_pt(px_cm + slot_w_cm / 2.0, col_y_center_cm - col_size_cm / 2.0 + slot_d_cm, 0.0)
     sketch_slot.sketchCurves.sketchLines.addTwoPointRectangle(slp1, slp2)
 
     if FUSION_AVAILABLE and post_body and len(sketch_slot.profiles) > 0:
@@ -373,16 +380,21 @@ def build_system(root_comp: Any, params: SystemParameters):
     s_t_cm = params.slat_thickness_mm / 10.0 # 0.50 cm
     s_h_cm = params.slat_height_mm / 10.0   # 6.00 cm
 
+    # Position slat aligned to the post's guide slot, extending into the frunk bay
+    slat_cx_cm = px_cm
+    slat_cy_cm = (col_y_center_cm - col_size_cm / 2.0) - (s_l_cm / 2.0)
+
     sketch_slat = sketches.add(plane_xy)
+    # 6" slat oriented across Y (from front to rear)
     slat_pts = [
-        (-s_l_cm / 2.0, -s_t_cm / 2.0),
-        (-s_l_cm / 2.0 - 0.6, -s_t_cm / 4.0),  # Male dovetail tab on left
-        (-s_l_cm / 2.0 - 0.6, s_t_cm / 4.0),
-        (-s_l_cm / 2.0, s_t_cm / 2.0),
-        (s_l_cm / 2.0, s_t_cm / 2.0),
-        (s_l_cm / 2.0 - 0.6, s_t_cm / 4.0),   # Female dovetail pocket on right
-        (s_l_cm / 2.0 - 0.6, -s_t_cm / 4.0),
-        (s_l_cm / 2.0, -s_t_cm / 2.0)
+        (slat_cx_cm - s_t_cm / 2.0, slat_cy_cm - s_l_cm / 2.0),
+        (slat_cx_cm - s_t_cm / 4.0, slat_cy_cm - s_l_cm / 2.0 - 0.6),  # Male dovetail tab at rear
+        (slat_cx_cm + s_t_cm / 4.0, slat_cy_cm - s_l_cm / 2.0 - 0.6),
+        (slat_cx_cm + s_t_cm / 2.0, slat_cy_cm - s_l_cm / 2.0),
+        (slat_cx_cm + s_t_cm / 2.0, slat_cy_cm + s_l_cm / 2.0),
+        (slat_cx_cm + s_t_cm / 4.0, slat_cy_cm + s_l_cm / 2.0 - 0.6),  # Female pocket at front
+        (slat_cx_cm - s_t_cm / 4.0, slat_cy_cm + s_l_cm / 2.0 - 0.6),
+        (slat_cx_cm - s_t_cm / 2.0, slat_cy_cm + s_l_cm / 2.0)
     ]
     s_pts = [_create_pt(p[0], p[1], 0.0) for p in slat_pts]
     for i in range(len(s_pts)):
@@ -462,13 +474,13 @@ def run(context=None):
         if ui:
             ui.messageBox(
                 "Tesla Model X Frunk Modular System Generated Successfully!\n\n"
-                "All 4 quadrants now feature the complete Two-Tier Stepped T-Rail:\n"
+                "All 6 solid bodies are now created and perfectly aligned:\n"
                 "  1. TRK_Front_L (Two-Tier T-Rail with 15° Dovetails)\n"
                 "  2. TRK_Front_R (Two-Tier T-Rail with 15° Dovetails)\n"
                 "  3. TRK_Rear_L (Two-Tier T-Rail with 15° Dovetails)\n"
                 "  4. TRK_Rear_R (Two-Tier T-Rail with 15° Dovetails)\n"
-                "  5. PST_Slide_Upright (Sliding Post with wrap-around captive base shoe & guide slot)\n"
-                "  6. SLAT_Segment_6in (6-inch modular interlocking cross slat)\n\n"
+                "  5. PST_Slide_Upright (Sliding Post wrapped on the rail with guide slot)\n"
+                "  6. SLAT_Segment_6in (6-inch modular interlocking cross slat aligned to slot)\n\n"
                 "Check the 'Bodies' folder in your Browser Tree!",
                 "Modular System Ready"
             )
