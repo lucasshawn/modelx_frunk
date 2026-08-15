@@ -34,7 +34,8 @@ This system replaces static pre-set grids with a **continuous conformal perimete
 
 ### 2.1 Conformal Perimeter Floor Track (`TRK_Conformal_Floor`)
 * **Geometry**: Derived directly from the calibrated LiDAR scan cross-section at $Z = 10\text{ mm}$, offset inward by exactly **$12.7\text{ mm}$ ($0.50\text{ in}$)**.
-* **Track Profile**: $30\text{ mm}$ wide $\times 18\text{ mm}$ tall with a captive top T-rail / dovetail track ($14\text{ mm}$ base, $8\text{ mm}$ neck).
+* **Track Profile**: Rigid rectangular cross-section ($30\text{ mm}$ wide $\times 18\text{ mm}$ tall) with flat top and vertical rectangular side guide rails. This wide rectangular box section provides maximum moment stiffness, preventing the upright posts from tipping, rocking, or falling over under load.
+* **Top Captive Rail**: Rectangular captive T-slot / dovetail channel along the rectangular top face.
 * **Modular Bed Partitioning**: The perimeter is split into 4 modular interlocking arc segments (`TRK_Front_L`, `TRK_Front_R`, `TRK_Rear_L`, `TRK_Rear_R`) under $310\text{ mm}$ each, connecting via rigid alignment dovetails to assemble seamlessly on the frunk carpet.
 * **Non-Slip Base**: Flat bottom surface ready for optional rubber TPU pads or grip tape.
 
