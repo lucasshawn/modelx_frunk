@@ -23,7 +23,7 @@ def test_cad_guide_covers_all_parameters():
     with open(guide_path, "r", encoding="utf-8") as f:
         content = f.read()
 
-    # All 17 parameters created in create_user_parameters must be documented
+    # All 26 parameters created in create_user_parameters must be documented
     expected_params = [
         "BaySpacing",
         "FrameHeight",
@@ -42,6 +42,15 @@ def test_cad_guide_covers_all_parameters():
         "DovetailBaseWidth",
         "DovetailDepth",
         "DovetailAngle",
+        "WallClearance",
+        "TrackWidth",
+        "TrackHeight",
+        "TrackRailBase",
+        "TrackRailNeck",
+        "TrackRailHeight",
+        "TrackBedMaxDim",
+        "TolSeamDovetail",
+        "SeamDovetailAngle",
     ]
 
     for param in expected_params:
@@ -63,10 +72,16 @@ def test_cad_guide_covers_all_components():
         "J_Cross_4Way",
         "DIV_Crosshatch_12x11",
         "Pin_Lock_M5",
+        "TRK_Front_L",
+        "TRK_Front_R",
+        "TRK_Rear_L",
+        "TRK_Rear_R",
+        "TRK_Master_Assembled",
     ]
 
     for comp in expected_components:
         assert comp in content, f"Component {comp} not documented in CAD guide"
+
 
 
 def test_cad_guide_covers_assembly_layouts_and_bom():

@@ -92,7 +92,7 @@ def test_readme_covers_vehicle_and_printer_compatibility(readme_content):
 
 
 def test_readme_covers_all_components(readme_content):
-    """Verify that all 8 distinct modular system components are documented."""
+    """Verify that all 13 distinct modular system components and track bodies are documented."""
     expected_components = [
         "FT_Segment_12in",
         "VR_Post_Deep",
@@ -102,6 +102,11 @@ def test_readme_covers_all_components(readme_content):
         "J_Cross_4Way",
         "DIV_Crosshatch_12x11",
         "Pin_Lock_M5",
+        "TRK_Front_L",
+        "TRK_Front_R",
+        "TRK_Rear_L",
+        "TRK_Rear_R",
+        "TRK_Master_Assembled",
     ]
 
     for comp in expected_components:
@@ -109,7 +114,7 @@ def test_readme_covers_all_components(readme_content):
 
 
 def test_readme_covers_all_parameters(readme_content):
-    """Verify that all 17 parametric CAD variables are listed in README.md."""
+    """Verify that all 26 parametric CAD variables are listed in README.md."""
     expected_params = [
         "BaySpacing",
         "FrameHeight",
@@ -128,10 +133,28 @@ def test_readme_covers_all_parameters(readme_content):
         "DovetailBaseWidth",
         "DovetailDepth",
         "DovetailAngle",
+        "WallClearance",
+        "TrackWidth",
+        "TrackHeight",
+        "TrackRailBase",
+        "TrackRailNeck",
+        "TrackRailHeight",
+        "TrackBedMaxDim",
+        "TolSeamDovetail",
+        "SeamDovetailAngle",
     ]
 
     for param in expected_params:
         assert param in readme_content, f"Parameter {param} not found in README.md"
+
+
+def test_readme_covers_conformal_floor_track(readme_content):
+    """Verify README covers conformal floor track LiDAR match, cross-section, and dovetails."""
+    assert "Conformal Floor Track" in readme_content or "conformal floor track" in readme_content.lower()
+    assert "12.7" in readme_content or "0.50" in readme_content
+    assert "30" in readme_content and "18" in readme_content
+    assert "15°" in readme_content or "15 deg" in readme_content or "15-deg" in readme_content
+    assert "310" in readme_content
 
 
 def test_readme_covers_bom_and_grid_layouts(readme_content):
@@ -155,6 +178,7 @@ def test_readme_covers_visual_diagrams(readme_content):
     assert "+=============================================================================+" in readme_content
     assert "HR_Rail" in readme_content
     assert "FT_Segment" in readme_content
+    assert "CONFORMAL FLOOR TRACK" in readme_content
 
     # Mermaid diagram element
     assert "```mermaid" in readme_content
@@ -201,6 +225,22 @@ def test_geometry_calc_parameter_values_match_code():
     assert params.dovetail_angle_deg == 15.0
 
 
+def test_conformal_track_calc_parameter_values_match_code():
+    """Verify ConformalTrackParameters defaults match documented specifications."""
+    from fusion_scripts.conformal_track_calc import ConformalTrackParameters
+
+    ct_params = ConformalTrackParameters()
+    assert ct_params.wall_clearance_mm == 12.7
+    assert ct_params.track_width_mm == 30.0
+    assert ct_params.track_height_mm == 18.0
+    assert ct_params.trail_base_width_mm == 14.0
+    assert ct_params.trail_neck_width_mm == 8.0
+    assert ct_params.trail_height_mm == 5.0
+    assert ct_params.tol_seam_dovetail_mm == 0.20
+    assert ct_params.seam_dovetail_angle_deg == 15.0
+    assert ct_params.max_bed_dimension_mm == 310.0
+
+
 def test_repo_directory_structure_integrity():
     """Verify that all core directories and files in the repository exist."""
     required_paths = [
@@ -211,14 +251,20 @@ def test_repo_directory_structure_integrity():
         os.path.join("docs", "3d_printing_and_slicing_guide.md"),
         os.path.join("fusion_scripts", "__init__.py"),
         os.path.join("fusion_scripts", "geometry_calc.py"),
+        os.path.join("fusion_scripts", "conformal_track_calc.py"),
         os.path.join("fusion_scripts", "generate_modelx_frunk_dividers.py"),
+        os.path.join("fusion_scripts", "ModelX_Frunk_Dividers_Standalone.py"),
         os.path.join("tests", "test_geometry_calc.py"),
+        os.path.join("tests", "test_conformal_track_calc.py"),
+        os.path.join("tests", "test_conformal_floor_generation.py"),
         os.path.join("tests", "test_fusion_script_syntax.py"),
         os.path.join("tests", "test_cad_modeling_guide.py"),
         os.path.join("tests", "test_printing_guide.py"),
         os.path.join("tests", "test_readme_and_repo_integrity.py"),
+        os.path.join("tests", "test_standalone_generation.py"),
     ]
 
     for path in required_paths:
         assert os.path.exists(path), f"Required repository file missing: {path}"
         assert os.path.getsize(path) > 0, f"Repository file is empty: {path}"
+

@@ -110,6 +110,10 @@ def test_print_bed_orientation_and_layout_matrix(guide_content):
         "J_Cross_4Way",
         "DIV_Crosshatch_12x11",
         "Pin_Lock_M5",
+        "TRK_Front_L",
+        "TRK_Front_R",
+        "TRK_Rear_L",
+        "TRK_Rear_R",
     ]
 
     for comp in components:

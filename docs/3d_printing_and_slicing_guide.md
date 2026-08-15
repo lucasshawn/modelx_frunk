@@ -102,6 +102,7 @@ To withstand these forces without excess weight, the slicing parameters are spli
 |  Junction Blocks (J_*)    | 5 Walls (2.0mm)  | 5 Top / 5  | Gyroid          |   35%    |
 |  Divider Panels (DIV_*)   | 4 Walls (1.6mm)  | N/A (Flat) | Solid Struts    |  100%    |
 |  Locking Pins (Pin_Lock)  | 6 Walls / Solid  | N/A        | Concentric      |  100%    |
+|  Floor Track Quads (TRK)  | 4 Walls (1.6mm)  | 4 Top / 4  | Gyroid          |   30%    |
 +=============================================================================+
 ```
 
@@ -131,6 +132,15 @@ To withstand these forces without excess weight, the slicing parameters are spli
 * **100% Solid Infill / 6+ Perimeters**:
 * Locking pins experience pure shear stress across the transverse joint. They must be printed 100% solid to prevent shear shearing under emergency braking.
 
+### 3.4 Conformal Floor Track Quadrants (`TRK_Front_L`, `TRK_Front_R`, `TRK_Rear_L`, `TRK_Rear_R`)
+
+1. **4 Perimeters & 30% Gyroid Infill**:
+   * The $30.0\text{ mm} \times 18.0\text{ mm}$ rigid rectangular cross-section requires maximum planar stiffness to resist cornering forces and prevent tipping under lateral acceleration.
+   * Slicing with 4 perimeters (1.6 mm shell) and 30% Gyroid infill provides high compressive resistance while keeping quadrant weight under 115 g each (~450 g total).
+2. **Support-Free Captive T-Rail & Dovetail Seams**:
+   * The top captive sliding rail ($14\text{ mm}$ base, $8\text{ mm}$ neck, $5\text{ mm}$ depth) prints with the slot opening facing UP on the build plate (0° overhang).
+   * The 15° interlocking dovetail seam tabs and pockets are oriented perpendicular to the bed and print with zero support material.
+
 ---
 
 ## 4. Creality K2 Specific Slicer Settings (OrcaSlicer / Creality Print)
@@ -159,7 +169,7 @@ The Creality K2 Combo high-speed hotend and CoreXY motion system can extrude hig
 
 ### 4.2 Speed, Acceleration & Motion Parameters
 
-To maintain tight tolerances on the 15° dovetails (`TolDovetail = 0.3 mm`) and tenon sockets (`TolTenon = 0.4 mm`), outer wall speeds and accelerations are tuned for dimensional precision, while infill utilizes the K2's high-speed kinematics:
+To maintain tight tolerances on the 15° dovetails (`TolDovetail = 0.3 mm`, `TolSeamDovetail = 0.2 mm`) and tenon sockets (`TolTenon = 0.4 mm`), outer wall speeds and accelerations are tuned for dimensional precision, while infill utilizes the K2's high-speed kinematics:
 
 ```
 +-----------------------------------------------------------------------------+
@@ -213,6 +223,10 @@ Proper 3D print orientation is critical in automotive applications because 3D pr
 |  J_Cross_4Way          | Flat on bottom base       | Planar (Shear load)    |
 |  DIV_Crosshatch_12x11  | Flat on build plate       | Planar (Impact load)   |
 |  Pin_Lock_M5           | Flat on horizontal side   | Longitudinal (Shear)   |
+|  TRK_Front_L           | Flat on bottom base (Z=0) | Planar Curve (Rigid)   |
+|  TRK_Front_R           | Flat on bottom base (Z=0) | Planar Curve (Rigid)   |
+|  TRK_Rear_L            | Flat on bottom base (Z=0) | Planar Curve (Rigid)   |
+|  TRK_Rear_R            | Flat on bottom base (Z=0) | Planar Curve (Rigid)   |
 +=============================================================================+
 ```
 
@@ -270,6 +284,13 @@ Proper 3D print orientation is critical in automotive applications because 3D pr
    [ Bed Orientation ]: Lay horizontally on the flat side of the dowel shaft.
    [ Engineering Rationale ]: Horizontal printing ensures layer lines run along
      the pin length, providing maximum shear resistance when locked into the frame.
+
+7. Conformal Floor Track Quadrants (TRK_Front_L, TRK_Front_R, TRK_Rear_L, TRK_Rear_R)
+   [ Bed Orientation ]: Lay completely flat on bottom base ($Z = 0$).
+   [ Dimensions ]: Max oriented bounding dimension $\le 310\text{ mm}$ (Creality K2 350mm bed).
+   [ Engineering Rationale ]: Top captive sliding channel and 15° dovetail seam tabs print
+     vertically without supports. Planar continuous extrusion around the arc ensures
+     maximum perimeter hoop stiffness.
 ```
 
 ### 5.2 Build Plate Batching & Layout on Creality K2 (350 × 350 mm)
@@ -300,6 +321,12 @@ Thanks to the K2's generous 350 × 350 mm bed, full-size subassemblies can be ba
 | - 16x Pin_Lock_M5 (Arrayed in a grid with 5 mm spacing)                     |
 | Estimated Print Time (ASA @ 100 mm/s): ~45 min                              |
 +-----------------------------------------------------------------------------+
+| BATCH 5: Conformal Floor Track (2 Quadrants per Build Plate)                |
+| Fits on Bed (350x350 mm):                                                   |
+| - Plate 5A: 1x TRK_Front_L + 1x TRK_Front_R (both <= 310mm, laid flat)      |
+| - Plate 5B: 1x TRK_Rear_L + 1x TRK_Rear_R (both <= 310mm, laid flat)        |
+| Estimated Print Time (ASA @ 200 mm/s): ~5 hrs 10 min per plate              |
++-----------------------------------------------------------------------------+
 ```
 
 ---
@@ -316,6 +343,7 @@ The parametric model incorporates dedicated tolerance variables to ensure smooth
 | `TolTenon` | **0.40 mm** | Clearance between vertical post tenon & truss socket | Secure interlock with pin |
 | `SlotWidth` | **6.40 mm** | Post slot width for 4.8 mm divider panels (0.8 mm clearance / side) | Free sliding rattle-free |
 | `PinDiameter` | **4.90 mm** | M5 lock pin shaft diameter in 5.20 mm reamed hole | Slip-fit with spring retention |
+| `TolSeamDovetail` | **0.20 mm** | Clearance on 15° interlocking quadrant track seams | Snug slip-fit seam joint |
 
 ### 6.2 Slicer Compensation Settings for Creality K2
 
@@ -328,7 +356,7 @@ If your test print feels overly tight or loose, adjust the following slicer sett
    * ASA and ABS contract by approximately **0.4% - 0.6%** during cooling.
    * If exact 12.000" bay dimensions are required, apply a **100.5% (1.005×) Uniform Scale** in X and Y axes in your slicer before exporting G-code.
 3. **Bed Adhesion & Brim Strategy for ASA/ABS**:
-   * For large parts (`FT_Segment_12in`, `VR_Post_Deep`), enable a **5 mm Outer Brim** with a **0.1 mm Brim-Object Gap** for clean breakaway.
+   * For large parts (`FT_Segment_12in`, `VR_Post_Deep`, `TRK_*`), enable a **5 mm Outer Brim** with a **0.1 mm Brim-Object Gap** for clean breakaway.
    * Alternatively, place **Mouse-Ear discs (20 mm diameter, 0.2 mm thick)** at the sharp corners of long parts to prevent corner lifting.
 
 ### 6.3 Post-Processing & Deburring Checklist
@@ -347,48 +375,57 @@ If your test print feels overly tight or loose, adjust the following slicer sett
 
 ```
 +=============================================================================+
-|                      5-STEP MODULAR ASSEMBLY SEQUENCE                       |
+|                      6-STEP MODULAR ASSEMBLY SEQUENCE                       |
 +=============================================================================+
 |                                                                             |
-|   Step 5: [ Lock Pins ] ----> Insert Pin_Lock_M5 into transverse holes      |
+|   Step 6: [ Lock Pins ] ----> Insert Pin_Lock_M5 into transverse holes      |
 |                                         |                                   |
-|   Step 4: [ Top Rails ] ----> Slide HR_Rail_12in onto top post dovetails    |
+|   Step 5: [ Top Rails ] ----> Slide HR_Rail_12in onto top post dovetails    |
 |                                         |                                   |
-|   Step 3: [ Dividers ]  ----> Slide DIV_Crosshatch into 6.4mm post channels |
+|   Step 4: [ Dividers ]  ----> Slide DIV_Crosshatch into 6.4mm post channels |
 |                                         |                                   |
-|   Step 2: [ Vert Posts] ----> Seat VR_Post_Deep tenons into truss sockets   |
+|   Step 3: [ Vert Posts] ----> Seat VR_Post_Deep tenons into truss sockets   |
 |                                         |                                   |
-|   Step 1: [ Base Grid ] ----> Interlock FT_Segment_12in with Junctions      |
+|   Step 2: [ Base Grid ] ----> Interlock FT_Segment_12in with Junctions      |
+|                                         |                                   |
+|   Step 1: [ Floor Track]----> Interlock 4 TRK Quadrants (15° Dovetails)     |
 +=============================================================================+
 ```
 
 ```
-STEP 1: Base Grid Assembly
+STEP 1: Conformal Floor Track Assembly
+1. Place the 4 Conformal Floor Track quadrants (TRK_Front_L, TRK_Front_R,
+   TRK_Rear_L, TRK_Rear_R) on the floor.
+2. Interlock the 15° tapered dovetail tabs into their corresponding pockets
+   (Front, Right, Rear, and Left seams).
+3. Verify that the continuous 360° loop forms smoothly with tight seam mating.
+
+STEP 2: Base Grid Assembly
 1. Place the Junction Blocks (J_Corner_90, J_Tee_3Way, or J_Cross_4Way) on a flat table.
 2. Align the 15° male dovetail tabs of the Floor Truss segments (FT_Segment_12in)
    with the female dovetail pockets of the junction blocks.
 3. Slide the trusses horizontally into the junctions until fully seated and flush.
 
-STEP 2: Vertical Post Insertion
+STEP 3: Vertical Post Insertion
 1. Take the Vertical Rib Posts (VR_Post_Deep).
 2. Insert the bottom rectangular tenon of each post into the vertical socket
    located on top of each junction block / floor truss node.
 3. Push downward until the post collar seats firmly against the truss upper face.
 
-STEP 3: Divider Panel Installation
+STEP 4: Divider Panel Installation
 1. Take the Diamond Crosshatch Divider Panels (DIV_Crosshatch_12x11).
 2. Align the outer edges of the panel with the 6.4 mm vertical guide channels
    in adjacent VR_Post_Deep posts.
 3. Slide the panel downward until its bottom edge rests inside the Floor Truss
    top alignment channel.
 
-STEP 4: Horizontal Top Rail Installation
+STEP 5: Horizontal Top Rail Installation
 1. Place the Horizontal Top Rails (HR_Rail_12in) over the top of the divider panels.
 2. Align the rail's downward channel over the top edge of the panel.
 3. Slide the rail's male/female dovetail ends into the top cap dovetails of the
    vertical posts, locking the upper perimeter into a rigid frame.
 
-STEP 5: Pin Lock Insertion & Vibration Securing
+STEP 6: Pin Lock Insertion & Vibration Securing
 1. Locate the transverse 5.0 mm locking pin holes at each post-to-truss and
    rail-to-post joint.
 2. Insert the Pin_Lock_M5 dowels into each hole until the retention shoulder clicks.
@@ -409,15 +446,19 @@ STEP 5: Pin Lock Insertion & Vibration Securing
 |     |   |          Shallow Front Shelf (Microwave Bag)           |   |      |
 |     |   +========================================================+   |      |
 |     |   |                                                        |   |      |
-|     |   |           DEEP REAR CARGO TUB (Flat Carpet Floor)      |   |      |
-|     |   |                                                        |   |      |
-|     |   |     +------------------+  +------------------+         |   |      |
-|     |   |     |   Bay 1 (Left)   |  |  Bay 2 (Center)  |         |   |      |
-|     |   |     |   (Charge Cable) |  |  (Tools/Jack)    |         |   |      |
-|     |   |     +------------------+  +------------------+         |   |      |
-|     |   |     |   Bay 3 (Right)  |  |  Bay 4 (Groceries|         |   |      |
-|     |   |     |   (Tire Inflator)|  |   / Travel Gear) |         |   |      |
-|     |   |     +------------------+  +------------------+         |   |      |
+|     |   |   +================================================+   |   |      |
+|     |   |   |   CONFORMAL FLOOR TRACK PERIMETER RING         |   |   |      |
+|     |   |   |   (0.50" / 12.7mm Inset from Carpeted Tub)     |   |   |      |
+|     |   |   |                                                |   |   |      |
+|     |   |   |     +------------------+  +------------------+ |   |   |      |
+|     |   |   |     |   Bay 1 (Left)   |  |  Bay 2 (Center)  | |   |   |      |
+|     |   |   |     |   (Charge Cable) |  |  (Tools/Jack)    | |   |   |      |
+|     |   |   |     +------------------+  +------------------+ |   |   |      |
+|     |   |   |     |   Bay 3 (Right)  |  |  Bay 4 (Groceries| |   |   |      |
+|     |   |   |     |   (Tire Inflator)|  |   / Travel Gear) | |   |   |      |
+|     |   |   |     +------------------+  +------------------+ |   |   |      |
+|     |   |   |                                                |   |   |      |
+|     |   |   +================================================+   |   |      |
 |     |   |                                                        |   |      |
 |     |   +--------------------------------------------------------+   |      |
 |     |                                                                |      |
@@ -428,7 +469,8 @@ STEP 5: Pin Lock Insertion & Vibration Securing
 
 1. **Non-Destructive Tub Placement**:
    * The 2017 Tesla Model X AWD frunk features a deep rear tub lined with automotive carpet.
-   * The modular divider grid rests directly on the carpet floor without requiring screws, adhesives, or permanent vehicle modifications.
+   * Lower the assembled 4-quadrant Conformal Floor Track into the tub. It nests neatly around the floor perimeter with 0.50" (12.7 mm) clearance.
+   * The modular divider grid rests directly on the carpet floor within the track perimeter without requiring screws, adhesives, or permanent vehicle modifications.
 2. **Anti-Rattle & Grip Measures**:
    * To prevent shifting during aggressive driving, attach 20 mm self-adhesive silicone / rubber anti-slip pads to the underside of each `J_Corner_90` and `FT_Segment_12in` base.
    * Optional: 3D print 1.5 mm thick snap-on foot caps in **95A TPU (Flexible Polyurethane)** and attach them to the truss bottoms for maximum carpet grip and acoustic vibration damping.
