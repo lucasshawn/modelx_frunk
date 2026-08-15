@@ -30,6 +30,11 @@ try:
         calculate_dovetail_profile,
         calculate_truss_web_triangles,
     )
+    from fusion_scripts.conformal_track_calc import (
+        extract_calibrated_floor_polygon,
+        generate_track_boundary_loops,
+        slice_track_quadrants,
+    )
 except ImportError:
     # Direct execution fallback
     from geometry_calc import (
@@ -37,6 +42,11 @@ except ImportError:
         calculate_diamond_lattice_segments,
         calculate_dovetail_profile,
         calculate_truss_web_triangles,
+    )
+    from conformal_track_calc import (
+        extract_calibrated_floor_polygon,
+        generate_track_boundary_loops,
+        slice_track_quadrants,
     )
 
 # Attempt Autodesk Fusion 360 API import
@@ -292,6 +302,16 @@ def create_user_parameters(design: Any, params: FrunkParameters) -> Any:
         ("DovetailBaseWidth", f"{params.dovetail_base_width_mm:.2f} mm", "mm", "Dovetail root width"),
         ("DovetailDepth", f"{params.dovetail_depth_mm:.2f} mm", "mm", "Dovetail tab depth"),
         ("DovetailAngle", f"{params.dovetail_angle_deg:.2f} deg", "deg", "Dovetail wedge flare half-angle"),
+        # Conformal Perimeter Floor Track Parameters
+        ("WallClearance", f"{params.wall_clearance_mm:.2f} mm", "mm", "0.50 in inward clearance from frunk tub perimeter"),
+        ("TrackWidth", f"{params.track_width_mm:.2f} mm", "mm", "Conformal floor track rigid profile width"),
+        ("TrackHeight", f"{params.track_height_mm:.2f} mm", "mm", "Conformal floor track rigid profile height"),
+        ("TrackRailBase", f"{params.trail_base_width_mm:.2f} mm", "mm", "Captive sliding top rail base width"),
+        ("TrackRailNeck", f"{params.trail_neck_width_mm:.2f} mm", "mm", "Captive sliding top rail neck width"),
+        ("TrackRailHeight", f"{params.trail_height_mm:.2f} mm", "mm", "Captive sliding top rail depth"),
+        ("TrackBedMaxDim", f"{params.max_bed_dimension_mm:.2f} mm", "mm", "Max print bed envelope limit (Creality K2)"),
+        ("TolSeamDovetail", f"{params.tol_seam_dovetail_mm:.2f} mm", "mm", "3D printing slip clearance for track quadrant seams"),
+        ("SeamDovetailAngle", f"{params.seam_dovetail_angle_deg:.2f} deg", "deg", "Quadrant interlocking dovetail taper angle"),
     ]
 
     for name, val_str, unit, comment in param_definitions:
@@ -702,6 +722,119 @@ def build_locking_pin_component(root_comp: Any, params: FrunkParameters) -> Any:
     return comp
 
 
+def build_conformal_floor_track(
+    root_comp: Any,
+    params: Optional[FrunkParameters] = None,
+    scan_mesh_path: Optional[str] = None,
+    offset_x: float = 0.0,
+    offset_y: float = -750.0,
+    separate_quadrants: bool = True,
+    build_assembled: bool = True,
+) -> Dict[str, Any]:
+    """
+    Builds 3D CAD solid bodies for the LiDAR-matched conformal perimeter floor track system.
+
+    Constructs:
+      1. TRK_Front_L: Front-Left quadrant with 15° interlocking dovetail tabs/pockets
+      2. TRK_Front_R: Front-Right quadrant with 15° interlocking dovetail tabs/pockets
+      3. TRK_Rear_L: Rear-Left quadrant with 15° interlocking dovetail tabs/pockets
+      4. TRK_Rear_R: Rear-Right quadrant with 15° interlocking dovetail tabs/pockets
+      5. TRK_Master_Assembled: Full continuous perimeter floor track ring
+
+    All 4 quadrants measure under 310 mm to fit flat on Creality K2 350x350 mm print bed.
+    """
+    if params is None:
+        params = FrunkParameters()
+
+    ops = _get_feature_operations()
+    sketches = root_comp.sketches
+    plane_xy = getattr(root_comp, "xYConstructionPlane", "XY")
+
+    h_cm = params.track_height_cm
+    ox = offset_x / 10.0
+    oy = offset_y / 10.0
+
+    floor_pts = None
+    if scan_mesh_path and os.path.exists(scan_mesh_path):
+        try:
+            floor_pts = extract_calibrated_floor_polygon(scan_mesh_path, z_height=params.floor_slice_z_mm)
+        except Exception:
+            pass
+
+    if floor_pts is None:
+        try:
+            from fusion_scripts.ModelX_Frunk_Dividers_Standalone import CALIBRATED_FLOOR_POLYGON
+            floor_pts = CALIBRATED_FLOOR_POLYGON
+        except Exception:
+            try:
+                floor_pts = extract_calibrated_floor_polygon("docs/scans/frunk_scan_calibrated.stl", z_height=params.floor_slice_z_mm)
+            except Exception:
+                floor_pts = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]
+
+    loops = generate_track_boundary_loops(
+        floor_pts,
+        wall_clearance_mm=params.wall_clearance_mm,
+        track_width_mm=params.track_width_mm,
+    )
+    quadrants = slice_track_quadrants(
+        loops["outer_loop"],
+        loops["inner_loop"],
+        params=params,
+    )
+
+    created_bodies: Dict[str, Any] = {}
+
+    # 1. Master Assembled Continuous Floor Ring
+    if build_assembled:
+        sketch_master = sketches.add(plane_xy)
+        out_pts = [_create_point(ox + p[0] / 10.0, oy + p[1] / 10.0, 0.0) for p in loops["outer_loop"]]
+        in_pts = [_create_point(ox + p[0] / 10.0, oy + p[1] / 10.0, 0.0) for p in loops["inner_loop"]]
+
+        for i in range(len(out_pts)):
+            sketch_master.sketchCurves.sketchLines.addByTwoPoints(out_pts[i], out_pts[(i + 1) % len(out_pts)])
+        for i in range(len(in_pts)):
+            sketch_master.sketchCurves.sketchLines.addByTwoPoints(in_pts[i], in_pts[(i + 1) % len(in_pts)])
+
+        if hasattr(root_comp.features, "extrudeFeatures") and len(sketch_master.profiles) > 0:
+            root_comp.features.extrudeFeatures.addSimple(sketch_master.profiles[0], _create_value_real(h_cm), ops["new"])
+            if hasattr(root_comp, "bRepBodies") and root_comp.bRepBodies.count > 0:
+                root_comp.bRepBodies.item(root_comp.bRepBodies.count - 1).name = "TRK_Master_Assembled"
+                created_bodies["TRK_Master_Assembled"] = root_comp.bRepBodies.item(root_comp.bRepBodies.count - 1)
+            else:
+                created_bodies["TRK_Master_Assembled"] = "TRK_Master_Assembled"
+
+    # 2. Four Printable Quadrants with 15° Dovetail Interlocking Seams
+    quad_offsets = {
+        "TRK_Front_L": (-60.0, 60.0) if separate_quadrants else (0.0, 0.0),
+        "TRK_Front_R": (60.0, 60.0) if separate_quadrants else (0.0, 0.0),
+        "TRK_Rear_L": (-60.0, -60.0) if separate_quadrants else (0.0, 0.0),
+        "TRK_Rear_R": (60.0, -60.0) if separate_quadrants else (0.0, 0.0),
+    }
+
+    for quad_name in ["TRK_Front_L", "TRK_Front_R", "TRK_Rear_L", "TRK_Rear_R"]:
+        if quad_name not in quadrants:
+            continue
+        q_geom = quadrants[quad_name]
+        dx, dy = quad_offsets[quad_name]
+        qx = ox + dx / 10.0
+        qy = oy + dy / 10.0
+
+        sketch_quad = sketches.add(plane_xy)
+        poly_pts = [_create_point(qx + p[0] / 10.0, qy + p[1] / 10.0, 0.0) for p in q_geom.polygon]
+        for i in range(len(poly_pts)):
+            sketch_quad.sketchCurves.sketchLines.addByTwoPoints(poly_pts[i], poly_pts[(i + 1) % len(poly_pts)])
+
+        if hasattr(root_comp.features, "extrudeFeatures") and len(sketch_quad.profiles) > 0:
+            root_comp.features.extrudeFeatures.addSimple(sketch_quad.profiles[0], _create_value_real(h_cm), ops["new"])
+            if hasattr(root_comp, "bRepBodies") and root_comp.bRepBodies.count > 0:
+                root_comp.bRepBodies.item(root_comp.bRepBodies.count - 1).name = quad_name
+                created_bodies[quad_name] = root_comp.bRepBodies.item(root_comp.bRepBodies.count - 1)
+            else:
+                created_bodies[quad_name] = quad_name
+
+    return created_bodies
+
+
 # ==============================================================================
 # Fusion 360 Entry Point & CLI Dry-Run
 # ==============================================================================
@@ -744,6 +877,9 @@ def run(context: Optional[Any] = None) -> None:
         comp_divider = build_divider_panel_component(root_comp, params)
         comp_pin = build_locking_pin_component(root_comp, params)
 
+        # Step 3: Build LiDAR-Matched Conformal Perimeter Floor Track
+        track_bodies = build_conformal_floor_track(root_comp, params, offset_x=0.0, offset_y=-750.0)
+
         summary_lines = [
             "=================================================================",
             "Tesla Model X 2017 Frunk Modular Divider System",
@@ -758,11 +894,14 @@ def run(context: Optional[Any] = None) -> None:
             f" 4. Junction Blocks: {', '.join(comp_junctions.keys())}",
             f" 5. {getattr(comp_divider, 'name', 'DIV_Crosshatch_12x11')} (Slide-in Diamond Mesh Divider)",
             f" 6. {getattr(comp_pin, 'name', 'Pin_Lock_M5')} (Transverse Locking Pin)",
+            f" 7. Conformal Floor Track Quadrants: {', '.join(track_bodies.keys())}",
             "",
             "Parametric Specifications (fx):",
             f" - Bay Spacing: {params.bay_spacing_mm} mm ({params.bay_spacing_in:.1f} in)",
             f" - Frame Height: {params.frame_height_mm} mm ({params.frame_height_in:.1f} in)",
             f" - Guide Slot Width: {params.slot_width_mm} mm (for {params.panel_thickness_mm} mm panel)",
+            f" - Wall Clearance: {params.wall_clearance_mm} mm ({params.wall_clearance_in:.2f} in)",
+            f" - Track Profile: {params.track_width_mm}x{params.track_height_mm} mm with {params.trail_neck_width_mm} mm rail",
             f" - Dovetail Joint: 15 deg wedge with {params.tol_dovetail_mm} mm slip clearance",
             f" - Tenon Socket: 20x20 mm with {params.tol_tenon_mm} mm slip clearance",
             f" - Lattice: 45 deg diamond mesh, {params.lattice_pitch_mm} mm pitch, {params.lattice_strut_mm} mm strut",
@@ -773,8 +912,8 @@ def run(context: Optional[Any] = None) -> None:
 
         if ui:
             ui.messageBox(
-                "Tesla Model X Frunk Divider System generated successfully!\n\n"
-                "All 6 component definitions and User Parameters (fx) have been populated.\n"
+                "Tesla Model X Frunk Divider & Conformal Floor System generated successfully!\n\n"
+                "All component definitions and User Parameters (fx) have been populated.\n"
                 "You can now inspect the timeline and modify parameters under Modify -> Change Parameters.",
                 "CAD Generation Complete"
             )

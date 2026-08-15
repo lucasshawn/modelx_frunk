@@ -18,6 +18,7 @@ from .generate_modelx_frunk_dividers import (
     build_junction_components,
     build_divider_panel_component,
     build_locking_pin_component,
+    build_conformal_floor_track,
 )
 
 __all__ = [
@@ -33,5 +34,6 @@ __all__ = [
     "build_junction_components",
     "build_divider_panel_component",
     "build_locking_pin_component",
+    "build_conformal_floor_track",
 ]
 

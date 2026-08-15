@@ -31,6 +31,19 @@ class FrunkParameters:
     dovetail_base_width_mm: float = 14.0 # Dovetail root width
     dovetail_depth_mm: float = 8.0      # Dovetail tab depth
     dovetail_angle_deg: float = 15.0    # Dovetail wedge half-angle (degrees)
+    wall_clearance_mm: float = 12.7     # 0.50 in inward clearance from frunk tub wall
+    track_width_mm: float = 30.0        # Base conformal perimeter track width
+    track_height_mm: float = 18.0       # Base conformal perimeter track height
+    floor_slice_z_mm: float = 10.0      # LiDAR slice elevation above lowest tub floor
+    trail_base_width_mm: float = 14.0   # Captive T-rail base width
+    trail_neck_width_mm: float = 8.0    # Captive T-rail neck width
+    trail_height_mm: float = 5.0        # Captive T-rail guide height
+    rigid_guide_width_mm: float = 18.0  # Rigid rectangular top guide width
+    rigid_guide_height_mm: float = 8.0  # Rigid rectangular guide wall height
+    rigid_wall_thickness_mm: float = 4.0 # Rigid vertical guide wall thickness
+    tol_seam_dovetail_mm: float = 0.20  # 3D printing slip clearance for quadrant seams
+    seam_dovetail_angle_deg: float = 15.0 # Quadrant interlocking dovetail taper angle
+    max_bed_dimension_mm: float = 310.0 # Maximum print bed envelope (Creality K2 350x350)
 
     @property
     def bay_spacing_in(self) -> float:
@@ -41,6 +54,11 @@ class FrunkParameters:
     def frame_height_in(self) -> float:
         """Frame height in inches."""
         return self.frame_height_mm / 25.4
+
+    @property
+    def wall_clearance_in(self) -> float:
+        """Wall clearance in inches."""
+        return self.wall_clearance_mm / 25.4
 
     @property
     def bay_spacing_cm(self) -> float:
@@ -83,6 +101,42 @@ class FrunkParameters:
     @property
     def pin_diameter_cm(self) -> float:
         return self.pin_diameter_mm / 10.0
+
+    @property
+    def wall_clearance_cm(self) -> float:
+        return self.wall_clearance_mm / 10.0
+
+    @property
+    def track_width_cm(self) -> float:
+        return self.track_width_mm / 10.0
+
+    @property
+    def track_height_cm(self) -> float:
+        return self.track_height_mm / 10.0
+
+    @property
+    def trail_base_width_cm(self) -> float:
+        return self.trail_base_width_mm / 10.0
+
+    @property
+    def trail_neck_width_cm(self) -> float:
+        return self.trail_neck_width_mm / 10.0
+
+    @property
+    def trail_height_cm(self) -> float:
+        return self.trail_height_mm / 10.0
+
+    @property
+    def rigid_guide_width_cm(self) -> float:
+        return self.rigid_guide_width_mm / 10.0
+
+    @property
+    def rigid_guide_height_cm(self) -> float:
+        return self.rigid_guide_height_mm / 10.0
+
+    @property
+    def rigid_wall_thickness_cm(self) -> float:
+        return self.rigid_wall_thickness_mm / 10.0
 
 
 def calculate_dovetail_profile(
